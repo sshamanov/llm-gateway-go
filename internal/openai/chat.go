@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -98,12 +99,6 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			return
 		}
 
-		// Step 3: If Stream is non-nil and true, reject.
-		if chatReq.Stream != nil && *chatReq.Stream {
-			writeJSONError(w, http.StatusBadRequest, "Streaming is not supported. Use stream=false or omit the stream parameter.", "invalid_request_error", "")
-			return
-		}
-
 		// Step 4: If Model is empty, reject.
 		if chatReq.Model == "" {
 			writeJSONError(w, http.StatusBadRequest, "model is required", "invalid_request_error", "")
@@ -132,6 +127,12 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			&chatReq,
 			registry.Policy(),
 		)
+
+		// Step 7b: If streaming, handle via streaming path.
+		if chatReq.Stream != nil && *chatReq.Stream {
+			handleStreamChatCompletion(w, r, logger, sched, chatReq.Model, resolved.Candidates, resolved.AliasConfig, messages, ollamaReq.Options)
+			return
+		}
 
 		// Step 8: Create job ID.
 		jobID, err := scheduler.NewJobID()
@@ -328,4 +329,149 @@ func parseStopField(raw json.RawMessage) []string {
 		return []string{single}
 	}
 	return nil
+}
+
+// handleStreamChatCompletion processes a streaming chat completion request.
+// It creates a streaming Job, submits it to the scheduler, reads streaming
+// chunks from StreamCh, and writes SSE events to the response writer.
+func handleStreamChatCompletion(
+	w http.ResponseWriter,
+	r *http.Request,
+	logger *logging.Logger,
+	sched *scheduler.Scheduler,
+	requestedModel string,
+	candidates []string,
+	aliasConfig *config.AliasConfig,
+	messages []ollama.ChatMessage,
+	options *ollama.ChatOptions,
+) {
+	// Set SSE headers.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Create a cancellable context derived from the request context.
+	streamCtx, cancelStream := context.WithCancel(r.Context())
+	defer cancelStream()
+
+	// Create job ID.
+	jobID, err := scheduler.NewJobID()
+	if err != nil {
+		// Can't write headers after status already sent, so just log.
+		if logger != nil {
+			logger.Error("streaming: failed to generate job ID",
+				logging.String("error", err.Error()),
+			)
+		}
+		return
+	}
+
+	// Create streaming job.
+	streamCh := make(chan *ollama.StreamChunk, 20)
+	job := &scheduler.Job{
+		ID:             jobID,
+		Kind:           scheduler.KindChat,
+		Priority:       scheduler.KindChat.Priority(),
+		Streaming:      true,
+		RequestedModel: requestedModel,
+		Candidates:     candidates,
+		AliasConfig:    aliasConfig,
+		Messages:       messages,
+		Options:        options,
+		StreamCh:       streamCh,
+		ResultChan:     make(chan scheduler.JobResult, 1),
+		JobCtx:         streamCtx,
+	}
+
+	// Submit to scheduler.
+	if err := sched.Submit(job); err != nil {
+		// Write error as SSE event and stop.
+		errJSON := fmt.Sprintf(`{"error":{"message":"Queue full: %s","type":"server_error","code":"queue_full"}}`, err.Error())
+		fmt.Fprintf(w, "data: %s\n\n", errJSON)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return
+	}
+
+	// Cancel the stream context when the client disconnects.
+	go func() {
+		select {
+		case <-r.Context().Done():
+			cancelStream()
+		case <-streamCtx.Done():
+			// Already cancelled by normal completion.
+		}
+	}()
+
+	chatID := generateChatID()
+	created := time.Now().Unix()
+	firstChunk := true
+
+	// Read chunks from the scheduler's stream channel.
+	for chunk := range job.StreamCh {
+		if chunk == nil {
+			continue
+		}
+		if chunk.Err != nil {
+			if logger != nil {
+				logger.Warn("streaming chunk error",
+					logging.String("job_id", jobID),
+					logging.String("error", chunk.Err.Error()),
+				)
+			}
+			break
+		}
+		if chunk.Response == nil {
+			continue
+		}
+
+		resp := chunk.Response
+
+		// Determine delta content.
+		role := ""
+		content := resp.Message.Content
+
+		// First chunk with content gets the role delta too.
+		if firstChunk && content != "" {
+			role = "assistant"
+			firstChunk = false
+		}
+
+		// Build finish reason and usage for final chunk.
+		finishReason := ""
+		var usage *sseUsage
+		if resp.Done {
+			finishReason = mapFinishReason(resp.DoneReason)
+			usage = &sseUsage{
+				PromptTokens:     resp.PromptEvalCount,
+				CompletionTokens: resp.EvalCount,
+				TotalTokens:      resp.PromptEvalCount + resp.EvalCount,
+			}
+		}
+
+		// Write SSE chunk.
+		if err := writeSSEChatChunk(w, chatID, requestedModel, created, role, content, finishReason, usage); err != nil {
+			// Client probably disconnected — cancel the backend.
+			cancelStream()
+			return
+		}
+	}
+
+	// Write [DONE] marker.
+	writeSSEDone(w)
+
+	// Wait for final result (for logging purposes, non-blocking via select).
+	select {
+	case result := <-job.ResultChan:
+		if result.Err != nil && logger != nil {
+			logger.Warn("streaming job finished with error",
+				logging.String("job_id", jobID),
+				logging.String("error", result.Err.Error()),
+			)
+		}
+	default:
+		// Result may already have been consumed or not sent.
+	}
 }

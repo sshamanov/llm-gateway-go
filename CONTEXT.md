@@ -86,58 +86,42 @@ Dependency order: T1 → T2 → T3 → T4+T5 (parallel) → T6.
 
 Dependency order: T1 → T2 → T4 → T5; T3 parallel with T1+T2.
 
-### Milestone 4: scheduler (in progress)
+### Milestone 5: streaming chat (completed)
 
-**Overview**: 7 tasks building `internal/scheduler/`. Replaces inline resolve→send with priority-scheduled dispatch: enqueue Job → scheduler scores assignments → acquire leases → SendChat → signal result. Each task ends with go vet + go test passing.
+**Overview**: 7 tasks implementing streaming chat completions. Ollama JSON-lines stream → SSE writer, scheduler retry before first meaningful token, client disconnect → cancel backend.
 
-**Task 1: Job types + priority queue** *(no scheduler deps)*
-- Files: `internal/scheduler/job.go`, `internal/scheduler/queue.go`
-- JobKind enum (Chat=100, Tool=90, etc.), JobState (Pending/Running/Completed/Failed), Job struct with ResultChan
-- Queue: mutex-protected max-heap by effective priority (base + age * aging_per_second), Enqueue/Dequeue/TopN/Remove
-- Tests: priority ordering, aging, TopN, Remove, concurrent safety
+**Task 1: Ollama streaming reader** *(no deps)*
+- Files: `internal/ollama/stream.go` (new)
+- `StreamChunk` (Response *ChatResponse, Err error), `SendChatStream(ctx, client, baseURL, req) (<-chan StreamChunk, error)`
+- JSON-lines reader via bufio.Scanner, context cancellation, buffered channel (cap 10)
 
-**Task 2: EWMA stats tracker** *(no scheduler deps, parallel with T1)*
-- Files: `internal/scheduler/stats.go`
-- BackendModelStats per backend+model (TPS, TTFT, cold load time, consecutive failures)
-- StatsTracker with RecordSuccess/RecordFailure, EWMA alpha=0.2
-- Tests: EWMA calculation, fallbacks, failure tracking, concurrent safety
+**Task 2: Job streaming fields** *(no deps, parallel with T1+T4)*
+- Files: modify `internal/scheduler/job.go`
+- Add `Streaming bool`, `StreamCh chan *ollama.StreamChunk`, `JobCtx context.Context` to Job struct
 
-**Task 3: Host/backend lease management** *(parallel with T1+T2)*
-- Files: `internal/scheduler/leases.go`
-- HostLeaseManager, BackendLeaseManager with Acquire/Release/FreeCapacity
-- Thread-safe via mutex, unknown host defaults to capacity=1
-- Tests: capacity limits, release, concurrent acquire storm
+**Task 3: Scheduler streaming assignment runner** *(depends on T1, T2)*
+- Files: modify `internal/scheduler/scheduler.go`
+- Branch `runAssignment` on `job.Streaming` → `runStreamingAssignment`
+- Retry loop: on failure before first chunk, find alternative backend, retry up to MaxAttempts
 
-**Task 4: Assignment scoring** *(depends on T2)*
-- Files: `internal/scheduler/scoring.go`
-- ValidAssignment check, full ARCH §9.6 cost formula
-- Tests: loaded model cheaper, substitution penalty, priority/aging credits, disruption cost
+**Task 4: SSE types and writer** *(no deps, parallel with T1+T2)*
+- Files: `internal/openai/sse_chat.go` (new)
+- Types: sseChatChunk, sseChatChoice, sseChatDelta, sseUsage; `writeSSEChatChunk`, `writeSSEDone`
 
-**Task 5: Scheduler dispatch loop** *(depends on T1-T4)*
-- Files: `internal/scheduler/scheduler.go`, `internal/scheduler/metrics.go`
-- Scheduler struct, NewScheduler, Start/Stop, Submit(job), dispatchLoop, findBestAssignment, runAssignment
-- Context support for cancellation, lease release on completion
-- Tests: submit→dispatch→result, host capacity serialization, loaded model preference, queue full, context cancellation
+**Task 5: Streaming handler path** *(depends on T3, T4)*
+- Files: modify `internal/openai/chat.go`
+- Remove stream rejection; branch to `handleStreamChatCompletion` when Stream=true
+- Role delta only on first content chunk (ARCH §10.1)
 
-**Task 6: Chat handler integration** *(depends on T5)*
-- Modify: `internal/ollama/chat.go` (add ctx parameter), `internal/openai/chat.go` (queue-based dispatch)
-- Chat handler: resolve→build job→Submit→await ResultChan→map response
-- Tests updated for scheduler integration
+**Task 6: Streaming tests** *(depends on T5)*
+- Files: modify `internal/openai/chat_test.go`
+- Tests: basic streaming, retry before first token, no retry after first token, client disconnect, model not found, queue full
 
-**Task 7: Wiring** *(depends on T6)*
-- Modify: `internal/httpapi/router.go` (add sched param), `cmd/proxy/main.go` (create/start/stop scheduler)
-- Nil-safe: skip chat route when sched is nil
+**Task 7: Wiring** *(implicit — existing route handles both stream=false and stream=true)*
 
-Dependency order: T1+T2+T3 (parallel) → T4 → T5 → T6 → T7.
+Dependency order: T1+T2+T4 (parallel) → T3 → T5 → T6.
 
-### Milestone 5: streaming chat
-
-Implement:
-- Ollama stream reader (JSON lines → channel)
-- OpenAI Chat Completions SSE writer
-- Retry before first meaningful token
-- No retry after first token
-- Client disconnect → cancel backend
+### Milestone 4: scheduler (completed)
 
 ### Milestone 6: Responses API
 
@@ -292,6 +276,38 @@ Implemented full priority-based job scheduler replacing the inline resolve→sen
 - Chat route nil-safe: only registered when both registry and sched non-nil
 - TPS computed from ChatResponse.EvalCount / TotalDuration seconds; cold load from LoadDuration nanoseconds
 - Disruption cost estimated via DisruptionFactor * cold_load_time when model not loaded
+
+**Global verification:**
+- `go vet ./...` — clean (9 packages)
+- `go test ./... -count=1` — 9/9 packages pass
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
+## 2026-05-22 — Milestone 5: streaming chat completed
+
+Implemented streaming chat completions with Ollama JSON-lines stream reader, SSE writer, scheduler retry before first meaningful token, and client disconnect cancellation. 9 packages, all tests pass.
+
+**Task 1: Ollama stream reader** — `internal/ollama/stream.go`. `StreamChunk` (Response *ChatResponse, Err error). `SendChatStream(ctx, client, baseURL, req) (<-chan StreamChunk, error)` — JSON-lines reader via bufio.Scanner (1MB max token), context cancellation, buffered channel (cap 10). Forces `stream: true`. 6 tests.
+
+**Task 2: Job streaming fields** — Modified `internal/scheduler/job.go`. Added `Streaming bool`, `StreamCh chan *ollama.StreamChunk`, `JobCtx context.Context` to Job struct.
+
+**Task 3: Scheduler streaming assignment runner** — Modified `internal/scheduler/scheduler.go`. `runAssignment` branches to `runStreamingAssignment` when `job.Streaming`. Retry loop: on failure before first chunk, finds alternative backend via `findStreamingBackend` (excludes failed backend IDs), retries up to `MaxAttempts`. First chunk held before forwarding to `StreamCh` (ARCH §10.1: retry before first meaningful token). Leases held for full streaming duration. 56 tests pass.
+
+**Task 4: SSE types and writer** — `internal/openai/sse_chat.go`. Types: sseChatChunk, sseChatChoice, sseChatDelta, sseUsage. `writeSSEChatChunk(w, id, model, created, role, content, finishReason, usage)` and `writeSSEDone(w)` — fmt.Fprintf + Flush.
+
+**Task 5: Streaming handler path** — Modified `internal/openai/chat.go`. Removed stream rejection. Added `handleStreamChatCompletion`: SSE headers → streaming Job with StreamCh → Submit → goroutine for client disconnect cancellation → read StreamCh → write SSE events. Role delta only on first content chunk. [DONE] marker at end.
+
+**Task 6: Streaming tests** — Modified `internal/openai/chat_test.go`. 6 new tests: RetryBeforeFirstToken (server1 500, server2 succeeds), RetryExhausted (both 500 → stream closes), ClientDisconnect (context cancellation verified via atomic), ModelNotFound (404 before SSE), QueueFull (SSE error event), NonStreamingStillWorks (regression).
+
+**Design decisions:**
+- Streaming jobs go through scheduler queue (not bypass) — fair queuing, priority aging, lease management
+- First chunk held in `runStreamingAssignment` before `StreamCh` forward — enables retry before first meaningful output per ARCH §10.1
+- After first chunk forwarded: no more retries
+- `StreamCh` channel (cap 20) bridges scheduler goroutine → handler goroutine
+- `JobCtx` derived from request context; client disconnect cancels it, which cancels the Ollama HTTP request
+- `findStreamingBackend` temporarily sets job state to Pending because `ValidAssignments` only considers pending jobs
+- SSE headers sent before scheduler Submit; queue full is reported as SSE error event (not HTTP error, since headers already sent)
 
 **Global verification:**
 - `go vet ./...` — clean (9 packages)

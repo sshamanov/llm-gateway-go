@@ -200,6 +200,11 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 		return
 	}
 
+	if job.Streaming {
+		s.runStreamingAssignment(&assignment, baseURL)
+		return
+	}
+
 	chatReq := ollama.ChatRequest{
 		Model:    assignment.ModelName,
 		Messages: job.Messages,
@@ -241,6 +246,236 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 
 	job.State = StateCompleted
 	job.ResultChan <- JobResult{Response: chatResp}
+}
+
+// runStreamingAssignment executes a streaming job assignment against an Ollama
+// backend. It manages its own retry loop (with context-aware chunk forwarding)
+// and releases/captures leases so the outer defer in runAssignment correctly
+// releases the final set of leases on return.
+func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
+	job := a.Job
+	currentBackendID := a.BackendID
+	currentHost := a.Host
+	currentModel := a.ModelName
+	currentBaseURL := baseURL
+
+	// Track failed backend IDs so we don't retry the same one.
+	failedBackends := make(map[string]bool)
+
+	// Ensure cleanup on exit.
+	defer func() {
+		s.Scorer.Hosts.ReleaseHost(currentHost)
+		s.Scorer.Backends.ReleaseBackend(currentBackendID)
+		if job.State == StateRunning {
+			job.State = StateFailed
+		}
+		close(job.StreamCh)
+		select {
+		case s.Wakeup <- struct{}{}:
+		default:
+		}
+	}()
+
+	maxAttempts := s.Scorer.Config.Retry.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// If not first attempt, find an alternative backend.
+		if attempt > 0 {
+			// Release current (failed) leases.
+			s.Scorer.Hosts.ReleaseHost(currentHost)
+			s.Scorer.Backends.ReleaseBackend(currentBackendID)
+
+			// Find an alternative backend, excluding previously-failed ones.
+			alt := s.findStreamingBackend(job, failedBackends)
+			if alt == nil {
+				err := fmt.Errorf("scheduler: no alternative backend after %d attempts", attempt)
+				if s.Logger != nil {
+					s.Logger.Error("streaming retry exhausted",
+						logging.String("job_id", job.ID),
+						logging.Int("attempts", attempt),
+					)
+				}
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+
+			// Acquire new leases.
+			if !s.Scorer.Hosts.AcquireHost(alt.Host) {
+				err := fmt.Errorf("scheduler: host at capacity for retry")
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+			if !s.Scorer.Backends.AcquireBackend(alt.BackendID) {
+				s.Scorer.Hosts.ReleaseHost(alt.Host)
+				err := fmt.Errorf("scheduler: backend at capacity for retry")
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+
+			// Update tracking variables and the outer assignment so the defer
+			// in runAssignment releases the correct (new) leases.
+			currentBackendID = alt.BackendID
+			currentHost = alt.Host
+			currentModel = alt.ModelName
+			currentBaseURL = s.BackendURLs[alt.BackendID]
+
+			a.Host = alt.Host
+			a.BackendID = alt.BackendID
+
+			job.BackendID = alt.BackendID
+			job.ConcreteModel = alt.ModelName
+		}
+
+		failedBackends[currentBackendID] = true
+
+		// Build streaming chat request.
+		chatReq := ollama.ChatRequest{
+			Model:    currentModel,
+			Messages: job.Messages,
+			Stream:   true,
+			Options:  job.Options,
+		}
+		if job.Think != nil {
+			chatReq.Think = job.Think
+		}
+
+		// Send streaming request (context-aware).
+		streamCh, err := ollama.SendChatStream(job.JobCtx, s.Client, currentBaseURL, &chatReq)
+		if err != nil {
+			s.Stats.RecordFailure(BackendModelKey{
+				BackendID: currentBackendID,
+				ModelName: currentModel,
+			})
+			if s.Logger != nil {
+				s.Logger.Warn("streaming request failed, will retry",
+					logging.String("job_id", job.ID),
+					logging.String("backend_id", currentBackendID),
+					logging.String("error", err.Error()),
+					logging.Int("attempt", attempt+1),
+				)
+			}
+			continue // retry
+		}
+
+		// Read the first chunk. Hold it — don't send to StreamCh yet.
+		// This implements retry allowed before first meaningful token.
+		firstChunk, ok := <-streamCh
+		if !ok {
+			// Stream closed immediately — treat as failure, retry.
+			s.Stats.RecordFailure(BackendModelKey{
+				BackendID: currentBackendID,
+				ModelName: currentModel,
+			})
+			continue
+		}
+
+		if firstChunk.Err != nil {
+			// Transport error on first chunk — retry.
+			s.Stats.RecordFailure(BackendModelKey{
+				BackendID: currentBackendID,
+				ModelName: currentModel,
+			})
+			continue
+		}
+
+		// We got the first meaningful chunk. From this point, no more retries.
+		// Record success will happen after all chunks are consumed.
+		var finalResponse *ollama.ChatResponse
+		var tps, coldLoad float64
+
+		// Send the first chunk to the handler.
+		select {
+		case job.StreamCh <- &firstChunk:
+		case <-job.JobCtx.Done():
+			return // client disconnected
+		}
+
+		// Drain remaining chunks.
+		for chunk := range streamCh {
+			if chunk.Err != nil {
+				// Error mid-stream: can't retry (already sent first chunk).
+				// Log and stop.
+				if s.Logger != nil {
+					s.Logger.Warn("streaming error mid-stream",
+						logging.String("job_id", job.ID),
+						logging.String("error", chunk.Err.Error()),
+					)
+				}
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: chunk.Err}
+				return
+			}
+
+			if chunk.Response != nil && chunk.Response.Done {
+				// Final chunk with metrics.
+				finalResponse = chunk.Response
+				tps = computeTPS(chunk.Response)
+				coldLoad = computeColdLoad(chunk.Response)
+			}
+
+			// Send chunk to handler (non-blocking, respect context).
+			select {
+			case job.StreamCh <- &chunk:
+			case <-job.JobCtx.Done():
+				return
+			}
+		}
+
+		// Stream completed successfully.
+		s.Stats.RecordSuccess(BackendModelKey{
+			BackendID: currentBackendID,
+			ModelName: currentModel,
+		}, tps, coldLoad)
+
+		job.State = StateCompleted
+		if finalResponse != nil {
+			job.ResultChan <- JobResult{Response: finalResponse}
+		} else {
+			job.ResultChan <- JobResult{Response: &ollama.ChatResponse{Done: true}}
+		}
+		return
+	}
+
+	// All retries exhausted.
+	err := fmt.Errorf("scheduler: streaming job failed after %d attempts", maxAttempts)
+	job.State = StateFailed
+	job.ResultChan <- JobResult{Err: err}
+}
+
+// findStreamingBackend finds the best backend for a streaming retry, excluding
+// previously-failed backends. It temporarily sets the job state to Pending
+// because ValidAssignments only considers pending jobs.
+func (s *Scheduler) findStreamingBackend(job *Job, excludeBackends map[string]bool) *Assignment {
+	// ValidAssignments only considers StatePending jobs. Streaming retries have
+	// StateRunning, so temporarily set Pending for the lookup.
+	originalState := job.State
+	job.State = StatePending
+	defer func() { job.State = originalState }()
+
+	snapshots := s.Snapshots()
+	pendingJobs := []*Job{job}
+
+	// Generate valid assignments, then filter out excluded backends.
+	allAssignments := s.Scorer.ValidAssignments(pendingJobs, snapshots)
+
+	var best *Assignment
+	for i := range allAssignments {
+		a := &allAssignments[i]
+		if excludeBackends[a.BackendID] {
+			continue
+		}
+		a.Cost = s.Scorer.Score(a)
+		if best == nil || a.Cost < best.Cost {
+			best = a
+		}
+	}
+	return best
 }
 
 // computeTPS estimates tokens per second from a ChatResponse.

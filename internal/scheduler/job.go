@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -52,6 +53,12 @@ type Job struct {
 	Think          *bool
 	Options        *ollama.ChatOptions
 	Tools          json.RawMessage
+
+	// Streaming job fields.
+	Streaming  bool                     // true if this is a streaming job
+	StreamCh   chan *ollama.StreamChunk // delivers streaming chunks to handler (must be created by submitter)
+	JobCtx     context.Context          // derived from HTTP request context; cancellation aborts backend request
+
 	ResultChan     chan JobResult
 	BackendID      string
 	ConcreteModel  string
