@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
@@ -49,7 +50,12 @@ func run() error {
 	}
 	logger := logging.NewLogger(logLevel, "proxy")
 
-	router := httpapi.NewRouter(logger)
+	// Backend registry for model discovery and health polling.
+	registry := backend.NewRegistry(&cfg, logger)
+	registry.Start()
+	defer registry.Stop()
+
+	router := httpapi.NewRouter(logger, registry)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

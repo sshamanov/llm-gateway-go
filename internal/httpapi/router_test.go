@@ -17,7 +17,7 @@ func TestRouterEndpoints(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger)
+	handler := httpapi.NewRouter(logger, nil)
 
 	tests := []struct {
 		name       string
@@ -80,7 +80,7 @@ func TestResponseIncludesRequestID(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger)
+	handler := httpapi.NewRouter(logger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestRequestIDFormat(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger)
+	handler := httpapi.NewRouter(logger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -144,7 +144,7 @@ func TestUniqueRequestIDs(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger)
+	handler := httpapi.NewRouter(logger, nil)
 
 	ids := make([]string, 2)
 	for i := range ids {
