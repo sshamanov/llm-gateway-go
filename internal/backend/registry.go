@@ -66,13 +66,15 @@ func (b *BackendState) Snapshot() BackendSnapshot {
 // polling. It polls each enabled Ollama backend for /api/tags (every 60s) and
 // /api/ps (every 5s), updating model lists and health state.
 type Registry struct {
-	backends     map[string]*BackendState
-	modelsConfig config.ModelsConfig
-	ollamaClient *http.Client
-	logger       *logging.Logger
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+	backends       map[string]*BackendState
+	modelsConfig   config.ModelsConfig
+	ollamaDefaults config.OllamaDefaultsConfig
+	policy         config.PolicyConfig
+	ollamaClient   *http.Client
+	logger         *logging.Logger
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 // NewRegistry creates a Registry from config. It creates a BackendState for each
@@ -91,12 +93,14 @@ func NewRegistry(cfg *config.Config, logger *logging.Logger) *Registry {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Registry{
-		backends:     backends,
-		modelsConfig: cfg.Models,
-		ollamaClient: ollama.NewHTTPClient(),
-		logger:       logger,
-		ctx:          ctx,
-		cancel:       cancel,
+		backends:       backends,
+		modelsConfig:   cfg.Models,
+		ollamaDefaults: cfg.OllamaDefaults,
+		policy:         cfg.Policy,
+		ollamaClient:   ollama.NewHTTPClient(),
+		logger:         logger,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -142,6 +146,24 @@ func (r *Registry) ModelsConfig() config.ModelsConfig {
 		return config.ModelsConfig{}
 	}
 	return r.modelsConfig
+}
+
+// OllamaDefaults returns the stored Ollama defaults configuration.
+// Returns zero value if registry is nil.
+func (r *Registry) OllamaDefaults() config.OllamaDefaultsConfig {
+	if r == nil {
+		return config.OllamaDefaultsConfig{}
+	}
+	return r.ollamaDefaults
+}
+
+// Policy returns the stored policy configuration.
+// Returns zero value if registry is nil.
+func (r *Registry) Policy() config.PolicyConfig {
+	if r == nil {
+		return config.PolicyConfig{}
+	}
+	return r.policy
 }
 
 // pollBackend runs the polling loop for a single backend. It performs immediate

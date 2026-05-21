@@ -250,3 +250,231 @@ func TestNewHTTPClient(t *testing.T) {
 	// Verify it's a usable *http.Client.
 	var _ *http.Client = client
 }
+
+func TestChatRequestUnmarshal(t *testing.T) {
+	think := true
+	data := `{
+		"model": "llama3:8b",
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "assistant", "content": "hi"}
+		],
+		"stream": true,
+		"think": true,
+		"keep_alive": "5m",
+		"options": {
+			"num_thread": 4,
+			"num_ctx": 4096,
+			"temperature": 0.7,
+			"top_p": 0.9,
+			"num_predict": 128,
+			"stop": ["\n", "user:"]
+		}
+	}`
+
+	var req ChatRequest
+	if err := json.Unmarshal([]byte(data), &req); err != nil {
+		t.Fatalf("unexpected error unmarshaling ChatRequest: %v", err)
+	}
+
+	if req.Model != "llama3:8b" {
+		t.Errorf("expected Model 'llama3:8b', got %q", req.Model)
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(req.Messages))
+	}
+	if req.Messages[0].Role != "user" || req.Messages[0].Content != "hello" {
+		t.Errorf("expected first message 'user: hello', got %q: %q", req.Messages[0].Role, req.Messages[0].Content)
+	}
+	if req.Messages[1].Role != "assistant" || req.Messages[1].Content != "hi" {
+		t.Errorf("expected second message 'assistant: hi', got %q: %q", req.Messages[1].Role, req.Messages[1].Content)
+	}
+	if !req.Stream {
+		t.Errorf("expected Stream true")
+	}
+	if req.Think == nil || *req.Think != think {
+		t.Errorf("expected Think true, got %v", req.Think)
+	}
+	if req.KeepAlive != "5m" {
+		t.Errorf("expected KeepAlive '5m', got %q", req.KeepAlive)
+	}
+	if req.Options.NumThread != 4 {
+		t.Errorf("expected Options.NumThread 4, got %d", req.Options.NumThread)
+	}
+	if req.Options.NumCtx != 4096 {
+		t.Errorf("expected Options.NumCtx 4096, got %d", req.Options.NumCtx)
+	}
+	if req.Options.Temperature != 0.7 {
+		t.Errorf("expected Options.Temperature 0.7, got %f", req.Options.Temperature)
+	}
+	if req.Options.TopP != 0.9 {
+		t.Errorf("expected Options.TopP 0.9, got %f", req.Options.TopP)
+	}
+	if req.Options.NumPredict != 128 {
+		t.Errorf("expected Options.NumPredict 128, got %d", req.Options.NumPredict)
+	}
+	if len(req.Options.Stop) != 2 || req.Options.Stop[0] != "\n" || req.Options.Stop[1] != "user:" {
+		t.Errorf("expected Options.Stop ['\\n', 'user:'], got %v", req.Options.Stop)
+	}
+}
+
+func TestChatRequestMarshal(t *testing.T) {
+	think := true
+	original := ChatRequest{
+		Model:    "llama3:8b",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+		Stream:   true,
+		Think:    &think,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("unexpected error marshaling ChatRequest: %v", err)
+	}
+
+	var roundTripped ChatRequest
+	if err := json.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("unexpected error unmarshaling ChatRequest: %v", err)
+	}
+
+	if roundTripped.Model != original.Model {
+		t.Errorf("expected Model %q, got %q", original.Model, roundTripped.Model)
+	}
+	if len(roundTripped.Messages) != len(original.Messages) {
+		t.Errorf("expected %d messages, got %d", len(original.Messages), len(roundTripped.Messages))
+	}
+	if roundTripped.Messages[0].Role != original.Messages[0].Role {
+		t.Errorf("expected Role %q, got %q", original.Messages[0].Role, roundTripped.Messages[0].Role)
+	}
+	if roundTripped.Messages[0].Content != original.Messages[0].Content {
+		t.Errorf("expected Content %q, got %q", original.Messages[0].Content, roundTripped.Messages[0].Content)
+	}
+	if roundTripped.Stream != original.Stream {
+		t.Errorf("expected Stream %v, got %v", original.Stream, roundTripped.Stream)
+	}
+	if roundTripped.Think == nil || *roundTripped.Think != *original.Think {
+		t.Errorf("expected Think %v, got %v", *original.Think, roundTripped.Think)
+	}
+}
+
+func TestChatResponseUnmarshal(t *testing.T) {
+	data := `{
+		"model": "llama3:8b",
+		"created_at": "2025-03-01T12:00:00Z",
+		"message": {
+			"role": "assistant",
+			"content": "Hello! How can I help you today?"
+		},
+		"done": true,
+		"total_duration": 123456789,
+		"load_duration": 50000000,
+		"prompt_eval_count": 42,
+		"eval_count": 150,
+		"done_reason": "stop"
+	}`
+
+	var resp ChatResponse
+	if err := json.Unmarshal([]byte(data), &resp); err != nil {
+		t.Fatalf("unexpected error unmarshaling ChatResponse: %v", err)
+	}
+
+	if resp.Model != "llama3:8b" {
+		t.Errorf("expected Model 'llama3:8b', got %q", resp.Model)
+	}
+
+	expectedTime, _ := time.Parse(time.RFC3339, "2025-03-01T12:00:00Z")
+	if !resp.CreatedAt.Equal(expectedTime) {
+		t.Errorf("expected CreatedAt %v, got %v", expectedTime, resp.CreatedAt)
+	}
+
+	if resp.Message.Role != "assistant" {
+		t.Errorf("expected Message.Role 'assistant', got %q", resp.Message.Role)
+	}
+	if resp.Message.Content != "Hello! How can I help you today?" {
+		t.Errorf("expected Message.Content 'Hello! How can I help you today?', got %q", resp.Message.Content)
+	}
+	if !resp.Done {
+		t.Errorf("expected Done true")
+	}
+	if resp.TotalDuration != 123456789 {
+		t.Errorf("expected TotalDuration 123456789, got %d", resp.TotalDuration)
+	}
+	if resp.LoadDuration != 50000000 {
+		t.Errorf("expected LoadDuration 50000000, got %d", resp.LoadDuration)
+	}
+	if resp.PromptEvalCount != 42 {
+		t.Errorf("expected PromptEvalCount 42, got %d", resp.PromptEvalCount)
+	}
+	if resp.EvalCount != 150 {
+		t.Errorf("expected EvalCount 150, got %d", resp.EvalCount)
+	}
+	if resp.DoneReason != "stop" {
+		t.Errorf("expected DoneReason 'stop', got %q", resp.DoneReason)
+	}
+}
+
+func TestChatRequest_OptionalFields(t *testing.T) {
+	req := ChatRequest{
+		Model:    "llama3:8b",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+		Stream:   true,
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("unexpected error marshaling ChatRequest: %v", err)
+	}
+
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unexpected error unmarshaling into map: %v", err)
+	}
+
+	if _, ok := result["think"]; ok {
+		t.Error("expected 'think' to be omitted from JSON output")
+	}
+	if _, ok := result["keep_alive"]; ok {
+		t.Error("expected 'keep_alive' to be omitted from JSON output")
+	}
+	if _, ok := result["options"]; ok {
+		t.Error("expected 'options' to be omitted from JSON output")
+	}
+	if _, ok := result["tools"]; ok {
+		t.Error("expected 'tools' to be omitted from JSON output")
+	}
+}
+
+func TestChatResponse_OptionalFieldsOmitted(t *testing.T) {
+	resp := ChatResponse{
+		Model:     "llama3:8b",
+		CreatedAt: time.Date(2025, 3, 1, 12, 0, 0, 0, time.UTC),
+		Message:   ChatMessage{Role: "assistant", Content: "Hello!"},
+		Done:      true,
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("unexpected error marshaling ChatResponse: %v", err)
+	}
+
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unexpected error unmarshaling into map: %v", err)
+	}
+
+	if _, ok := result["total_duration"]; ok {
+		t.Error("expected 'total_duration' to be omitted from JSON output")
+	}
+	if _, ok := result["load_duration"]; ok {
+		t.Error("expected 'load_duration' to be omitted from JSON output")
+	}
+	if _, ok := result["prompt_eval_count"]; ok {
+		t.Error("expected 'prompt_eval_count' to be omitted from JSON output")
+	}
+	if _, ok := result["eval_count"]; ok {
+		t.Error("expected 'eval_count' to be omitted from JSON output")
+	}
+	if _, ok := result["done_reason"]; ok {
+		t.Error("expected 'done_reason' to be omitted from JSON output")
+	}
+}

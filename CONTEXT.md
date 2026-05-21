@@ -8,7 +8,7 @@ Last updated: 2026-05-22
 
 ### Milestone 1: skeleton (completed)
 
-### Milestone 2: backend discovery (in progress)
+### Milestone 2: backend discovery (completed)
 
 **Overview**: 6 ordered tasks. Each task creates specific files, has clear dependencies, and ends with `go vet` and `go test` passing. The milestone implements the Ollama backend registry, polling for `/api/tags` and `/api/ps`, plus three HTTP endpoints: `/debug/backends`, `/debug/models`, `/v1/models`.
 
@@ -50,14 +50,41 @@ Last updated: 2026-05-22
 
 Dependency order: T1 → T2 → T3 → T4+T5 (parallel) → T6.
 
-### Milestone 3: non-streaming chat
+### Milestone 3: non-streaming chat (in progress)
 
-Implement:
-- Model resolution (alias → candidates, native → exact)
-- Alias override application (think, keep_alive, options)
-- Ollama `/api/chat` client call
-- `/v1/chat/completions` endpoint
-- OpenAI-compatible response shaping
+**Overview**: 5 tasks. T1 (types) and T3 (resolution) parallel → T2 (SendChat, depends T1) → T4 (handler, depends T1+T2+T3) → T5 (wire route). Pre-scheduler: simple first-healthy-backend selection.
+
+**Task 1: Ollama Chat types** *(no dependencies)*
+- Files: `internal/ollama/types.go` (add types)
+- Add `ChatRequest` (Model, Messages, Stream, Think *bool, KeepAlive, Options ChatOptions, Tools json.RawMessage), `ChatMessage` (Role, Content), `ChatOptions` (NumThread, NumCtx, Temperature, TopP, NumPredict, Stop — omitempty), `ChatResponse` (Model, CreatedAt, Message, Done, durations/counts with omitempty)
+- Tests: roundtrip marshal/unmarshal
+
+**Task 2: Ollama SendChat** *(depends on Task 1)*
+- Files: `internal/ollama/chat.go`
+- `SendChat(client, baseURL, req *ChatRequest) (*ChatResponse, error)` — POST /api/chat, follows FetchTags/FetchPS pattern
+- Tests: httptest covering success, HTTP error, invalid JSON, trailing slash
+
+**Task 3: Model resolution + backend selection** *(parallel with T1+T2, no deps on them)*
+- Files: `internal/backend/resolve.go` (new), modify `registry.go` (add OllamaDefaults/Policy accessors)
+- Types: `ResolutionKind` (ResolutionAlias/ResolutionNative), `ResolvedModel` (Kind, RequestedID, Candidates, AliasConfig)
+- `Registry.Resolve(modelID string) (*ResolvedModel, error)` — alias exact match first, then native model check if exposed
+- `FindFirstBackend(snapshots, modelName) (*BackendSnapshot, error)` — first enabled+healthy backend with model
+- Add `OllamaDefaults()` and `Policy()` nil-safe accessors to Registry
+- Tests: alias/native resolution, unknown model, FindFirstBackend skipping unhealthy/disabled
+
+**Task 4: OpenAI chat handler** *(depends on Tasks 1, 2, 3)*
+- Files: `internal/openai/chat.go`
+- Types: chatCompletionRequest/Response, chatRequestMessage, chatChoice, responseMessage, chatUsage
+- `ChatCompletionsHandler(logger, registry) http.Handler`
+- Logic: decode → reject stream → resolve → find backend → buildOllamaRequest (defaults→alias→client overrides) → SendChat → map to OpenAI response
+- `buildOllamaRequest(modelName, messages, defaults, alias, req, policy)` — merge options
+- Tests: basic chat, native model, options injection, model not found (404), no backend (503), stream rejected (400)
+
+**Task 5: Wire route** *(depends on Task 4)*
+- Modify: `internal/httpapi/router.go` — add `POST /v1/chat/completions` route in registry non-nil block
+- Test: route registered when registry non-nil, 404 when nil
+
+Dependency order: T1 → T2 → T4 → T5; T3 parallel with T1+T2.
 
 ### Milestone 4: scheduler
 
@@ -152,6 +179,36 @@ Implemented the full skeleton: 5 packages, 10 source files, all tests passing.
 
 ---
 
+## 2026-05-22 — Milestone 2: backend discovery completed
+
+Implemented Ollama backend registry, model discovery polling, debug endpoints, and /v1/models. 8 packages, all tests pass.
+
+**Task 1: Ollama types + client** — `internal/ollama/types.go`, `client.go`. TagsResponse, PSResponse, ModelDetail types matching Ollama API. `NewHTTPClient()` factory (30s timeout). 6 tests.
+
+**Task 2: FetchTags + FetchPS** — `internal/ollama/tags.go`, `ps.go`. `FetchTags(client, baseURL)` calls GET /api/tags, `FetchPS` for /api/ps. Handles trailing slashes, non-200, parse errors. httptest-based tests. 8 new tests (14 total).
+
+**Task 3: Backend registry** — `internal/backend/health.go`, `model_state.go`, `registry.go`. `HealthState` with SetHealthy/SetUnhealthy/Snapshot. `ModelNamesFromTags/PS` helpers. `Registry` struct: `NewRegistry(cfg, logger)`, `Start` (goroutine per backend: tags/60s, ps/5s with immediate initial poll), `Stop` (context cancel + WaitGroup), `BackendSnapshots()` and `ModelsConfig()` both nil-safe. Snapshot pattern: write under lock, return value copy. 8 tests.
+
+**Task 4: Debug handlers** — `internal/httpapi/backends.go`, `models.go`. `DebugBackendsHandler` returns `{"data":[BackendSnapshot...]}`. `DebugModelsHandler` returns aliases + native_models + loaded_models. Both nil-safe (return empty arrays on nil registry). 7 new tests.
+
+**Task 5: /v1/models OpenAI endpoint** — `internal/openai/models.go`. `ModelsHandler` returns `{"object":"list","data":[...]}`. Aliases: created=0, owned_by="proxy". Native models: created=LastContact.Unix(), owned_by="ollama". Dedup: alias names win. Ordering: aliases first (config order), natives sorted alphabetically. Nil-safe. 7 tests.
+
+**Task 6: Wiring** — Modified `router.go` (NewRouter accepts *backend.Registry, conditionally registers routes when non-nil), `main.go` (creates/starts/stops registry, passes to router), `main_test.go` and `router_test.go` (pass nil registry). No regressions.
+
+**Global verification:**
+- `go vet ./...` — clean (8 packages)
+- `go test ./... -count=1` — 8/8 packages pass
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+**Design decisions:**
+- Thread safety via snapshot pattern: poll goroutines write under lock, HTTP handlers request value copies under RLock
+- NewRouter signature changed from one parameter to two; registry is nullable for graceful degradation
+- Poll intervals: /api/tags every 60s, /api/ps every 5s per ARCH §7.1
+- Immediate initial polls on Start (not after first ticker tick)
+- Ollama client is deliberately thin: just factory + standalone fetch functions; registry owns the client
+
+---
+
 ## Open Questions
 
 (none yet)
@@ -169,14 +226,12 @@ Implemented the full skeleton: 5 packages, 10 source files, all tests passing.
 
 ## Live Stream
 
-Launched M2 Plan subagent to create task breakdown for backend discovery.
-M2 plan applied: 6 tasks, T1→T2→T3→T4+T5(parallel)→T6.
-Launching M2 T1: Ollama API types + HTTP client.
-T1 complete: 6 tests pass, types.go + client.go + tests. Launching T2: FetchTags + FetchPS.
-T2 complete: 14 tests pass (8 new). tags.go, ps.go with httptest-based tests. Launching T3: backend registry.
-T3 complete: 8 tests pass. health.go, model_state.go, registry.go with poll goroutines + httptest. Launching T4+T5 in parallel.
-T4 complete: 7 new tests pass. DebugBackendsHandler + DebugModelsHandler with nil-safe semantics.
-T5 complete: 7 new tests pass. OpenAI /v1/models endpoint: aliases, dedup, native exposure control.
-Launching T6: wiring registry into router.go and main.go.
-T3 complete: 8 tests pass, 4 files (health.go, model_state.go, registry.go, registry_test.go), go vet + go test clean. Backend registry with polling, health tracking, nil-safe API.
-T5 complete: internal/openai/models.go + models_test.go, ModelsHandler serves OpenAI /v1/models with aliases (created=0, owned_by=proxy) and optional native Ollama models (created=LastContact, owned_by=ollama), dedup by alias name, aliases first then sorted native models, nil-safe. 7 tests pass, go vet clean.
+Launching M3 Plan subagent for non-streaming chat task breakdown.
+M3 plan applied: 5 tasks. Launching T1 (chat types) + T3 (resolution) in parallel.
+T1 complete: 19 tests pass, ChatRequest/ChatResponse types added.
+T3 complete: 22 tests pass, Resolve + FindFirstBackend + OllamaDefaults/Policy accessors.
+Launching T2: SendChat function.
+T2 complete: 23 tests pass. SendChat POSTs to /api/chat.
+Launching T4: OpenAI chat handler (main M3 task).
+T4 complete: 22 tests pass (15 new). ChatCompletionsHandler with buildOllamaRequest merging.
+Launching T5: wire /v1/chat/completions into router.

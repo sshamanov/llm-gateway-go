@@ -21,6 +21,7 @@ func NewRouter(logger *logging.Logger, registry *backend.Registry) http.Handler 
 		mux.Handle("GET /debug/backends", DebugBackendsHandler(logger, registry))
 		mux.Handle("GET /debug/models", DebugModelsHandler(logger, registry))
 		mux.Handle("GET /v1/models", openai.ModelsHandler(logger, registry))
+		mux.Handle("POST /v1/chat/completions", openai.ChatCompletionsHandler(logger, registry))
 	}
 
 	var h http.Handler = mux
