@@ -1,0 +1,16 @@
+* text=auto
+
+*.go text
+*.ts text
+*.js text
+*.json text
+*.md text
+*.yml text
+*.yaml text
+*.css text
+*.html text
+*.mod text
+*.sum text
+
+Dockerfile text eol=lf
+.dockerignore text eol=lf

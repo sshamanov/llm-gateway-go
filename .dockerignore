@@ -1,0 +1,8 @@
+.git/
+bin/
+dist/
+*.md
+.env
+.gitattributes
+.gitignore
+.gitmessage

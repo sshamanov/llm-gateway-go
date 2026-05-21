@@ -1,0 +1,14 @@
+services:
+  proxy:
+    build:
+      context: .
+      network: host
+    container_name: llm-go-proxy
+    network_mode: host
+    volumes:
+      - ./data:/data
+    environment:
+      - PROXY_LISTEN=0.0.0.0:4000
+      - PROXY_STORAGE_DIR=/data
+    restart: unless-stopped
+    stop_grace_period: 30s
