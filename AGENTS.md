@@ -5,6 +5,26 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
 
 ---
 
+## Boundaries
+
+**This document owns:**
+- How agents behave in this repo — startup sequence, live streaming, task completion, compaction
+- Project rules: commit style, git policy, branch conventions, what is committed
+- Build rules: stack, commands, naming conventions, directory layout
+- Project constitution: scope, goals, work style
+- The Source-of-Truth Map — which document covers which concern
+
+**This document does NOT contain:**
+- Code structure, component design, data flow, implementation decisions → **[ARCHITECTURE.md](ARCHITECTURE.md)**
+- API reference, product behavior, debug UI specification, UX rules → **[DESIGN.md](DESIGN.md)**
+- Active tasks, open questions, decision history, live action stream → **[CONTEXT.md](CONTEXT.md)**
+- Repo overview, quick start, env reference → **[README.md](README.md)**
+- Immutable change history → **`git log`**
+
+**Rewrite policy:** User request only. This document defines the rules for all other documents.
+
+---
+
 ## Source-of-Truth Map
 
 | Concern | Authority | Rule |

@@ -2,6 +2,31 @@
 
 # Ollama Native Proxy — Architecture and Implementation Specification
 
+---
+
+## Boundaries
+
+**This document owns:**
+- System overview and core architectural rules
+- Stack, runtime, and toolchain
+- Package layout and directory structure
+- Component design: scheduler, backend discovery, API translation, document processing, streaming, metrics
+- Data flow: how requests move through the system
+- Configuration schema and loading rules
+- Model resolution, alias logic, scheduling algorithm
+- Implementation milestones and acceptance criteria
+- Testing requirements
+
+**This document does NOT contain:**
+- Agent rules, git policy, build commands, project constitution → **[AGENTS.md](AGENTS.md)**
+- API reference (endpoint shapes and responses), user journeys, debug UI layout, UX principles → **[DESIGN.md](DESIGN.md)**
+- Active tasks, open questions, decision history, live action stream → **[CONTEXT.md](CONTEXT.md)**
+- Quick start, env reference for operators → **[README.md](README.md)**
+
+**Rewrite policy:** On design/architecture changes. Keep in sync with DESIGN.md — API translation logic here, endpoint behavior there.
+
+---
+
 ## 1. System Overview
 
 Ollama Native Proxy is a Docker-first Go HTTP gateway that exposes practical OpenAI-compatible and Anthropic-compatible APIs while routing actual local inference work through Ollama native APIs.

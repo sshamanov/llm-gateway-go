@@ -2,6 +2,31 @@
 
 # Ollama Native Proxy — Product and Debug UI Design
 
+---
+
+## Boundaries
+
+**This document owns:**
+- Product summary and capabilities
+- User personas, goals, and journeys
+- API endpoint behavior — what each endpoint accepts and returns, status codes, error shapes
+- Debug UI specification — layout, panels, polling behavior, what is shown and redacted
+- UX principles: compatibility first, clean responses, read-only observability, disk-backed safety
+- Interaction flows: debug UI polling, error presentation, model name visibility
+- Edge cases and error states: no backend, backend disabled, queue full, disk full, client disconnect
+- Accessibility and security from the user's perspective
+- Explicit out-of-scope UX list
+
+**This document does NOT contain:**
+- Code structure, package layout, scheduler algorithm, implementation details → **[ARCHITECTURE.md](ARCHITECTURE.md)**
+- Agent rules, git policy, build commands, project constitution → **[AGENTS.md](AGENTS.md)**
+- Active tasks, open questions, decision history, live action stream → **[CONTEXT.md](CONTEXT.md)**
+- Quick start, env reference for operators → **[README.md](README.md)**
+
+**Rewrite policy:** On API/UX/behavior changes. Keep in sync with ARCHITECTURE.md — endpoint behavior here, translation logic there.
+
+---
+
 ## 1. Product Summary
 
 Ollama Native Proxy is a Docker-first local gateway that exposes practical OpenAI-compatible and Anthropic-compatible APIs while routing work to local or LAN backends.
