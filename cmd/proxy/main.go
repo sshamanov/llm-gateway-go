@@ -13,6 +13,7 @@ import (
 	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
+	"llm-go-proxy/internal/scheduler"
 	"llm-go-proxy/internal/storage"
 )
 
@@ -55,7 +56,30 @@ func run() error {
 	registry.Start()
 	defer registry.Stop()
 
-	router := httpapi.NewRouter(logger, registry)
+	// Scheduler for queue-based dispatch of LLM requests.
+	backendURLs := make(map[string]string, len(cfg.OllamaBackends))
+	for _, bc := range cfg.OllamaBackends {
+		if bc.Enabled {
+			backendURLs[bc.ID] = bc.URL
+		}
+	}
+	schedHosts := scheduler.NewHostLeaseManager(cfg.Hosts)
+	schedBackends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
+	schedStats := scheduler.NewStatsTracker()
+	schedScorer := scheduler.NewScorer(schedStats, schedHosts, schedBackends, cfg.Scheduler)
+	sched := scheduler.NewScheduler(
+		scheduler.NewQueue(cfg.Scheduler.AgingPerSecond),
+		schedScorer,
+		schedStats,
+		http.DefaultClient,
+		backendURLs,
+		logger,
+		registry.BackendSnapshots,
+	)
+	sched.Start()
+	defer sched.Stop()
+
+	router := httpapi.NewRouter(logger, registry, sched)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

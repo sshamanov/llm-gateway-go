@@ -11,11 +11,32 @@ import (
 	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/ollama"
+	"llm-go-proxy/internal/scheduler"
 )
 
 // ---------------------------------------------------------------------------
 // Handler integration tests
 // ---------------------------------------------------------------------------
+
+// newTestScheduler creates a Scheduler from config and registry for use in
+// openai handler tests. The scheduler is NOT started — the caller must call
+// Start() and Stop().
+func newTestScheduler(t *testing.T, cfg *config.Config, reg *backend.Registry, backendURLs map[string]string) *scheduler.Scheduler {
+	t.Helper()
+	hosts := scheduler.NewHostLeaseManager(cfg.Hosts)
+	backends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
+	stats := scheduler.NewStatsTracker()
+	scorer := scheduler.NewScorer(stats, hosts, backends, cfg.Scheduler)
+	return scheduler.NewScheduler(
+		scheduler.NewQueue(cfg.Scheduler.AgingPerSecond),
+		scorer,
+		stats,
+		http.DefaultClient,
+		backendURLs,
+		nil,
+		reg.BackendSnapshots,
+	)
+}
 
 func TestChatCompletions_Basic(t *testing.T) {
 	// Fake Ollama server that responds to /api/tags, /api/ps, and /api/chat.
@@ -72,7 +93,11 @@ func TestChatCompletions_Basic(t *testing.T) {
 	// Wait for initial poll to complete.
 	time.Sleep(200 * time.Millisecond)
 
-	handler := ChatCompletionsHandler(logger, reg)
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ChatCompletionsHandler(logger, reg, sched)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -177,7 +202,11 @@ func TestChatCompletions_NativeModel(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	handler := ChatCompletionsHandler(logger, reg)
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ChatCompletionsHandler(logger, reg, sched)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -222,7 +251,7 @@ func TestChatCompletions_ModelNotFound(t *testing.T) {
 	logger := newDiscardLogger()
 	reg := backend.NewRegistry(&cfg, logger)
 
-	handler := ChatCompletionsHandler(logger, reg)
+	handler := ChatCompletionsHandler(logger, reg, nil)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -249,40 +278,37 @@ func TestChatCompletions_ModelNotFound(t *testing.T) {
 	}
 }
 
-func TestChatCompletions_NoBackend(t *testing.T) {
-	// Fake server that has models that don't match the alias candidate.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "/api/tags") {
-			json.NewEncoder(w).Encode(ollama.TagsResponse{
-				Models: []ollama.TagsModel{{Name: "unrelated-model"}},
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
-	}))
-	defer ts.Close()
-
+func TestChatCompletions_QueueFull(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Models = config.ModelsConfig{
 		ExposeNativeOllamaModels: false,
 		Aliases: []config.AliasConfig{{
 			Name:         "test-alias",
-			PrimaryModel: "nonexistent-model",
+			PrimaryModel: "some-model",
 		}},
 	}
-	cfg.OllamaBackends = []config.OllamaBackendConfig{
-		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
-	}
+	// Set queue max pending to 0 so any submit fails with ErrQueueFull.
+	cfg.Scheduler.QueueMaxPending = 0
 
 	logger := newDiscardLogger()
 	reg := backend.NewRegistry(&cfg, logger)
-	reg.Start()
-	defer reg.Stop()
 
-	time.Sleep(200 * time.Millisecond)
+	// Build a scheduler with QueueMaxPending=0 — any submit will fail immediately.
+	hosts := scheduler.NewHostLeaseManager(cfg.Hosts)
+	backends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
+	stats := scheduler.NewStatsTracker()
+	scorer := scheduler.NewScorer(stats, hosts, backends, cfg.Scheduler)
+	sched := scheduler.NewScheduler(
+		scheduler.NewQueue(cfg.Scheduler.AgingPerSecond),
+		scorer,
+		stats,
+		http.DefaultClient,
+		nil,
+		nil,
+		func() []backend.BackendSnapshot { return nil },
+	)
 
-	handler := ChatCompletionsHandler(logger, reg)
+	handler := ChatCompletionsHandler(logger, reg, sched)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -304,14 +330,14 @@ func TestChatCompletions_NoBackend(t *testing.T) {
 	if errResp.Error.Type != "server_error" {
 		t.Errorf("expected Type 'server_error', got %q", errResp.Error.Type)
 	}
-	if errResp.Error.Code != "backend_unavailable" {
-		t.Errorf("expected Code 'backend_unavailable', got %q", errResp.Error.Code)
+	if errResp.Error.Code != "queue_full" {
+		t.Errorf("expected Code 'queue_full', got %q", errResp.Error.Code)
 	}
 }
 
 func TestChatCompletions_StreamRejected(t *testing.T) {
 	logger := newDiscardLogger()
-	handler := ChatCompletionsHandler(logger, nil)
+	handler := ChatCompletionsHandler(logger, nil, nil)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -368,7 +394,11 @@ func TestChatCompletions_HTTPError(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	handler := ChatCompletionsHandler(logger, reg)
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ChatCompletionsHandler(logger, reg, sched)
 	handlerTS := httptest.NewServer(handler)
 	defer handlerTS.Close()
 
@@ -621,7 +651,7 @@ func TestBuildOllamaRequest_ClientOverridesDisallowed(t *testing.T) {
 }
 
 func TestBuildOllamaRequest_FullStack(t *testing.T) {
-	// Test all three layers: defaults → alias → client overrides.
+	// Test all three layers: defaults -> alias -> client overrides.
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
 		Think:     false,
@@ -678,17 +708,17 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 		t.Errorf("expected NumThread 4, got %d", result.Options.NumThread)
 	}
 
-	// Temperature: defaults(0.7) → alias(0.1) → client(0.5) = 0.5 (client wins).
+	// Temperature: defaults(0.7) -> alias(0.1) -> client(0.5) = 0.5 (client wins).
 	if result.Options.Temperature != 0.5 {
 		t.Errorf("expected Temperature 0.5 (client overrides alias), got %f", result.Options.Temperature)
 	}
 
-	// TopP: defaults(0.9) → client(0.8) = 0.8.
+	// TopP: defaults(0.9) -> client(0.8) = 0.8.
 	if result.Options.TopP != 0.8 {
 		t.Errorf("expected TopP 0.8, got %f", result.Options.TopP)
 	}
 
-	// MaxTokens → NumPredict.
+	// MaxTokens -> NumPredict.
 	if result.Options.NumPredict != 200 {
 		t.Errorf("expected NumPredict 200, got %d", result.Options.NumPredict)
 	}
@@ -730,4 +760,3 @@ func TestBuildOllamaRequest_StopParsing_SingleString(t *testing.T) {
 		t.Errorf("expected stop[0] '\\n', got %q", result.Options.Stop[0])
 	}
 }
-

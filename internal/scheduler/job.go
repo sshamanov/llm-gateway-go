@@ -1,0 +1,79 @@
+package scheduler
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"time"
+
+	"llm-go-proxy/internal/config"
+	"llm-go-proxy/internal/ollama"
+)
+
+// JobKind classifies a job for priority and routing purposes.
+type JobKind int
+
+const (
+	KindChat            JobKind = 100
+	KindTool            JobKind = 90
+	KindVision          JobKind = 90
+	KindImageGeneration JobKind = 60
+	KindAudio           JobKind = 50
+	KindDocument        JobKind = 30
+)
+
+// Priority returns the numeric priority associated with the job kind.
+func (k JobKind) Priority() int {
+	return int(k)
+}
+
+// JobState represents the lifecycle state of a job.
+type JobState int
+
+const (
+	StatePending JobState = iota
+	StateRunning
+	StateCompleted
+	StateFailed
+)
+
+// Job represents a single request to be processed by a backend.
+type Job struct {
+	ID             string
+	Kind           JobKind
+	Priority       int
+	State          JobState
+	CreatedAt      time.Time
+	RequestedModel string
+	Candidates     []string
+	AliasConfig    *config.AliasConfig
+	Messages       []ollama.ChatMessage
+	KeepAlive      string
+	Think          *bool
+	Options        *ollama.ChatOptions
+	Tools          json.RawMessage
+	ResultChan     chan JobResult
+	BackendID      string
+	ConcreteModel  string
+	Attempts       int
+}
+
+// JobResult carries the outcome of a completed job.
+type JobResult struct {
+	Response *ollama.ChatResponse
+	Err      error
+}
+
+// Duration returns the time elapsed since the job was created.
+func (j *Job) Duration() time.Duration {
+	return time.Since(j.CreatedAt)
+}
+
+// NewJobID generates a random 16-byte hex string for use as a job ID.
+func NewJobID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

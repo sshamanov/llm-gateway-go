@@ -13,6 +13,7 @@ import (
 	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/logging"
 	"llm-go-proxy/internal/ollama"
+	"llm-go-proxy/internal/scheduler"
 )
 
 // maxRequestBodySize limits the incoming request body to 10 MB.
@@ -81,7 +82,7 @@ type chatErrorDetail struct {
 
 // ChatCompletionsHandler returns an HTTP handler for the OpenAI-compatible
 // POST /v1/chat/completions endpoint.
-func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry) http.Handler {
+func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, sched *scheduler.Scheduler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Step 1: Read body (limited to maxRequestBodySize).
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
@@ -116,34 +117,15 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry) 
 			return
 		}
 
-		// Step 6: Get backend snapshots.
-		snapshots := registry.BackendSnapshots()
-
-		// Step 7: Iterate candidates, find the first backend that has the model.
-		var backendSnapshot *backend.BackendSnapshot
-		var modelName string
-		for _, candidate := range resolved.Candidates {
-			snap, err := backend.FindFirstBackend(snapshots, candidate)
-			if err == nil {
-				backendSnapshot = snap
-				modelName = candidate
-				break
-			}
-		}
-		if backendSnapshot == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "No backend available", "server_error", "backend_unavailable")
-			return
-		}
-
-		// Step 8: Convert messages.
+		// Step 6: Convert messages.
 		messages := make([]ollama.ChatMessage, len(chatReq.Messages))
 		for i, msg := range chatReq.Messages {
 			messages[i] = ollama.ChatMessage{Role: msg.Role, Content: msg.Content}
 		}
 
-		// Step 9: Build Ollama request.
+		// Step 7: Build merged options using the first candidate.
 		ollamaReq := buildOllamaRequest(
-			modelName,
+			resolved.Candidates[0],
 			messages,
 			registry.OllamaDefaults(),
 			resolved.AliasConfig,
@@ -151,23 +133,44 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry) 
 			registry.Policy(),
 		)
 
-		// Step 10: Create HTTP client (no timeout — server WriteTimeout enforces it).
-		client := &http.Client{}
-
-		// Step 11: Send chat to Ollama.
-		ollamaResp, err := ollama.SendChat(client, backendSnapshot.URL, &ollamaReq)
+		// Step 8: Create job ID.
+		jobID, err := scheduler.NewJobID()
 		if err != nil {
-			logger.Error("ollama chat failed",
-				logging.String("model", modelName),
-				logging.String("backend", backendSnapshot.ID),
-				logging.String("error", err.Error()),
-			)
-			writeJSONError(w, http.StatusBadGateway, "Backend error: "+err.Error(), "server_error", "")
+			writeJSONError(w, http.StatusInternalServerError, "Failed to generate job ID", "server_error", "")
 			return
 		}
 
-		// Step 12: Map response to OpenAI-compatible shape.
-		response := mapChatResponse(ollamaResp, chatReq.Model)
+		// Step 9: Create and submit job to scheduler.
+		job := &scheduler.Job{
+			ID:             jobID,
+			Kind:           scheduler.KindChat,
+			Priority:       scheduler.KindChat.Priority(),
+			RequestedModel: chatReq.Model,
+			Candidates:     resolved.Candidates,
+			AliasConfig:    resolved.AliasConfig,
+			Messages:       messages,
+			Options:        ollamaReq.Options,
+			ResultChan:     make(chan scheduler.JobResult, 1),
+		}
+
+		if err := sched.Submit(job); err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "Queue full: "+err.Error(), "server_error", "queue_full")
+			return
+		}
+
+		// Step 10: Wait for result.
+		result := <-job.ResultChan
+		if result.Err != nil {
+			logger.Error("chat job failed",
+				logging.String("model", chatReq.Model),
+				logging.String("error", result.Err.Error()),
+			)
+			writeJSONError(w, http.StatusBadGateway, "Backend error: "+result.Err.Error(), "server_error", "")
+			return
+		}
+
+		// Step 11: Map response to OpenAI-compatible shape.
+		response := mapChatResponse(result.Response, chatReq.Model)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(response); err != nil {

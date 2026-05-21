@@ -50,7 +50,7 @@ Last updated: 2026-05-22
 
 Dependency order: T1 → T2 → T3 → T4+T5 (parallel) → T6.
 
-### Milestone 3: non-streaming chat (in progress)
+### Milestone 3: non-streaming chat (completed)
 
 **Overview**: 5 tasks. T1 (types) and T3 (resolution) parallel → T2 (SendChat, depends T1) → T4 (handler, depends T1+T2+T3) → T5 (wire route). Pre-scheduler: simple first-healthy-backend selection.
 
@@ -86,15 +86,49 @@ Dependency order: T1 → T2 → T3 → T4+T5 (parallel) → T6.
 
 Dependency order: T1 → T2 → T4 → T5; T3 parallel with T1+T2.
 
-### Milestone 4: scheduler
+### Milestone 4: scheduler (in progress)
 
-Implement:
-- Global job queue with priorities
-- Host/backend lease management
-- EWMA stats tracking per backend+model
-- Assignment scoring (cost formula from ARCHITECTURE.md §9.6)
-- Dispatch loop (event-driven, non-preemptive)
-- Scheduler metrics
+**Overview**: 7 tasks building `internal/scheduler/`. Replaces inline resolve→send with priority-scheduled dispatch: enqueue Job → scheduler scores assignments → acquire leases → SendChat → signal result. Each task ends with go vet + go test passing.
+
+**Task 1: Job types + priority queue** *(no scheduler deps)*
+- Files: `internal/scheduler/job.go`, `internal/scheduler/queue.go`
+- JobKind enum (Chat=100, Tool=90, etc.), JobState (Pending/Running/Completed/Failed), Job struct with ResultChan
+- Queue: mutex-protected max-heap by effective priority (base + age * aging_per_second), Enqueue/Dequeue/TopN/Remove
+- Tests: priority ordering, aging, TopN, Remove, concurrent safety
+
+**Task 2: EWMA stats tracker** *(no scheduler deps, parallel with T1)*
+- Files: `internal/scheduler/stats.go`
+- BackendModelStats per backend+model (TPS, TTFT, cold load time, consecutive failures)
+- StatsTracker with RecordSuccess/RecordFailure, EWMA alpha=0.2
+- Tests: EWMA calculation, fallbacks, failure tracking, concurrent safety
+
+**Task 3: Host/backend lease management** *(parallel with T1+T2)*
+- Files: `internal/scheduler/leases.go`
+- HostLeaseManager, BackendLeaseManager with Acquire/Release/FreeCapacity
+- Thread-safe via mutex, unknown host defaults to capacity=1
+- Tests: capacity limits, release, concurrent acquire storm
+
+**Task 4: Assignment scoring** *(depends on T2)*
+- Files: `internal/scheduler/scoring.go`
+- ValidAssignment check, full ARCH §9.6 cost formula
+- Tests: loaded model cheaper, substitution penalty, priority/aging credits, disruption cost
+
+**Task 5: Scheduler dispatch loop** *(depends on T1-T4)*
+- Files: `internal/scheduler/scheduler.go`, `internal/scheduler/metrics.go`
+- Scheduler struct, NewScheduler, Start/Stop, Submit(job), dispatchLoop, findBestAssignment, runAssignment
+- Context support for cancellation, lease release on completion
+- Tests: submit→dispatch→result, host capacity serialization, loaded model preference, queue full, context cancellation
+
+**Task 6: Chat handler integration** *(depends on T5)*
+- Modify: `internal/ollama/chat.go` (add ctx parameter), `internal/openai/chat.go` (queue-based dispatch)
+- Chat handler: resolve→build job→Submit→await ResultChan→map response
+- Tests updated for scheduler integration
+
+**Task 7: Wiring** *(depends on T6)*
+- Modify: `internal/httpapi/router.go` (add sched param), `cmd/proxy/main.go` (create/start/stop scheduler)
+- Nil-safe: skip chat route when sched is nil
+
+Dependency order: T1+T2+T3 (parallel) → T4 → T5 → T6 → T7.
 
 ### Milestone 5: streaming chat
 
@@ -209,6 +243,63 @@ Implemented Ollama backend registry, model discovery polling, debug endpoints, a
 
 ---
 
+## 2026-05-22 — Milestone 3: non-streaming chat completed
+
+Implemented model resolution, Ollama /api/chat client, /v1/chat/completions endpoint with options merging.
+
+**Task 1: Chat types** — Added ChatRequest, ChatMessage, ChatOptions, ChatResponse to `internal/ollama/types.go`. Options uses `*ChatOptions` pointer for proper omitempty. 5 new tests (19 total).
+
+**Task 2: SendChat** — `internal/ollama/chat.go`. POSTs JSON to `{baseURL}/api/chat`, follows FetchTags pattern. 4 httptest tests (23 total).
+
+**Task 3: Model resolution** — `internal/backend/resolve.go`. `Registry.Resolve(modelID)` — alias exact match → native model discovery on backends → error. `FindFirstBackend(snapshots, modelName)` — first enabled+healthy backend. Added `OllamaDefaults()` and `Policy()` nil-safe accessors. 14 new tests (22 total).
+
+**Task 4: OpenAI chat handler** — `internal/openai/chat.go`. `ChatCompletionsHandler(logger, registry)`. Full pipeline: decode → reject streaming → resolve → find backend → buildOllamaRequest (defaults→alias→client merge per ARCH §8) → SendChat → map to OpenAI response. Error shapes match OpenAI format. 15 new tests (22 total).
+
+**Task 5: Wire route** — Added `POST /v1/chat/completions` to router's registry-non-nil block.
+
+**Global verification:** 8 packages pass, go vet clean, go build succeeds.
+
+**Design decisions:**
+- Options merging order: defaults → alias overrides (non-zero fields only) → client overrides (when allowed)
+- ChatResponse uses `*ChatOptions` to distinguish nil from zero-value struct for omitempty
+- Pre-scheduler backend selection: simple first-match iteration over snapshots
+- Stream=true returns 400 until M5 implements streaming
+
+---
+
+## 2026-05-22 — Milestone 4: scheduler completed
+
+Implemented full priority-based job scheduler replacing the inline resolve→send pattern from M3. 9 packages, all tests pass.
+
+**Task 1: Job types + priority queue** — `internal/scheduler/job.go`, `queue.go`. JobKind enum (Chat=100, Tool/Vision=90, Image=60, Audio=50, Document=30), JobState (Pending/Running/Completed/Failed), Job struct with ResultChan. Queue: mutex-protected max-heap keyed by effective priority (base + age * aging_per_second). Enqueue/Dequeue/TopN/Remove/PendingCount. 15 tests.
+
+**Task 2: EWMA stats tracker** — `internal/scheduler/stats.go`. BackendModelStats per backend+model (TPS, cold load time, consecutive failures). StatsTracker with RecordSuccess/RecordFailure, EWMA alpha=0.2. GetTokensPerSecond/GetColdLoadTime with fallbacks. 9 tests.
+
+**Task 3: Lease management** — `internal/scheduler/leases.go`. HostLeaseManager and BackendLeaseManager with Acquire/Release/FreeCapacity. Thread-safe via mutex, unknown host/backend defaults to capacity=1. 13 tests.
+
+**Task 4: Assignment scoring** — `internal/scheduler/scoring.go`. Assignment/Scorer types. ValidAssignments (filters by enabled, healthy, model available, host capacity, backend capacity). Score computes full ARCH §9.6 cost formula (backend_wait + host_load + model_switch + estimated_generation_time + disruption + substitution + failure_penalty - priority_credit - aging_credit). BestAssignment returns lowest-cost valid assignment. 14 tests.
+
+**Task 5: Scheduler dispatch loop** — `internal/scheduler/scheduler.go`. Scheduler struct holding Queue, Scorer, Stats, Client, BackendURLs. NewScheduler constructor. Submit (enqueue + non-blocking wakeup). Start/Stop (context cancel + WaitGroup). dispatchLoop (wakeup-driven event loop). dispatch (TopN → BestAssignment → acquire leases → mark running → go runAssignment). runAssignment (build ChatRequest → SendChat → record stats → result on ResultChan, leases released in defer). 8 tests.
+
+**Task 6: Chat handler integration** — Modified `internal/openai/chat.go`. ChatCompletionsHandler signature changed to accept `*scheduler.Scheduler`. Replaced inline resolve→find backend→send with: resolve → build options → create Job → Submit → await ResultChan → map response. Updated tests to create real scheduler with fake Ollama backend.
+
+**Task 7: Wiring** — Modified `internal/httpapi/router.go` (NewRouter accepts `sched` param, chat route only when both registry and sched non-nil). Modified `cmd/proxy/main.go` (creates HostLeaseManager, BackendLeaseManager, StatsTracker, Scorer, Scheduler; Start/Stop; passes to NewRouter). Updated test files to pass nil scheduler.
+
+**Design decisions:**
+- Wakeup channel buffered cap 1 with non-blocking send — prevents dispatch stalls
+- Leases released in defer (even on panic) — prevents capacity leaks
+- Chat handler passes nil scheduler for tests that fail before dispatch (model not found, stream rejected)
+- Chat route nil-safe: only registered when both registry and sched non-nil
+- TPS computed from ChatResponse.EvalCount / TotalDuration seconds; cold load from LoadDuration nanoseconds
+- Disruption cost estimated via DisruptionFactor * cold_load_time when model not loaded
+
+**Global verification:**
+- `go vet ./...` — clean (9 packages)
+- `go test ./... -count=1` — 9/9 packages pass
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
 ## Open Questions
 
 (none yet)
@@ -225,13 +316,3 @@ Implemented Ollama backend registry, model discovery polling, debug endpoints, a
 ---
 
 ## Live Stream
-
-Launching M3 Plan subagent for non-streaming chat task breakdown.
-M3 plan applied: 5 tasks. Launching T1 (chat types) + T3 (resolution) in parallel.
-T1 complete: 19 tests pass, ChatRequest/ChatResponse types added.
-T3 complete: 22 tests pass, Resolve + FindFirstBackend + OllamaDefaults/Policy accessors.
-Launching T2: SendChat function.
-T2 complete: 23 tests pass. SendChat POSTs to /api/chat.
-Launching T4: OpenAI chat handler (main M3 task).
-T4 complete: 22 tests pass (15 new). ChatCompletionsHandler with buildOllamaRequest merging.
-Launching T5: wire /v1/chat/completions into router.
