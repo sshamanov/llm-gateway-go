@@ -11,6 +11,7 @@ import (
 
 	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/config"
+	"llm-go-proxy/internal/documents"
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
 	"llm-go-proxy/internal/scheduler"
@@ -79,7 +80,15 @@ func run() error {
 	sched.Start()
 	defer sched.Stop()
 
-	router := httpapi.NewRouter(logger, registry, sched, paths)
+	// Document processing preparation queue.
+	prepareQueue := documents.NewPrepareQueue(cfg.Documents.PreparationWorkers)
+	prepareQueue.Start()
+	defer prepareQueue.Stop()
+
+	// Document inference coordinator.
+	docCoordinator := documents.NewCoordinator(sched, logger)
+
+	router := httpapi.NewRouter(logger, registry, sched, paths, prepareQueue, docCoordinator, cfg.Documents)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

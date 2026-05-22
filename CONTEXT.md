@@ -123,6 +123,8 @@ Dependency order: T1+T2+T4 (parallel) → T3 → T5 → T6.
 
 ### Milestone 7: Anthropic Messages API (completed)
 
+### Milestone 8: documents (completed)
+
 ### Milestone 6: Responses API (completed)
 
 ### Milestone 4: scheduler (completed)
@@ -376,6 +378,48 @@ Implemented `/v1/messages` (non-streaming + streaming) and `/v1/messages/count_t
 
 ---
 
+---
+
+## 2026-05-22 — Milestone 8: Document Processing completed
+
+Implemented `/proxy/documents/process` with multipart upload, PDF text extraction, page rendering, preparation queue, and low-priority chunk inference. 11 packages, all tests pass.
+
+**Task 1: Types** — `internal/documents/types.go` (new). FileType enum (TXT, MD, PDF, PNG, JPG, JPEG, WEBP), Mode constants (auto, text_only, vision_pages, ocr, hybrid), Chunk/ChunkType, ProcessRequest/Response, PrepareTask/Result, 7 error variables, constants (DefaultChunkSize=4000, MinTextThreshold=100, DefaultMaxBytes=50MB), SupportedExtensions map.
+
+**Task 2: File detection + spool** — `internal/documents/files.go` (new). DetectFileType (extension → FileType), SpoolMultipartFile (crypto/rand hex name, io.CopyN limited), SpoolBase64Data, ValidateFileSize. Returns ErrDocumentTooLarge/ErrUnsupportedFileType.
+
+**Task 3: PDF text extraction** — `internal/documents/pdf.go` (new, ~500 lines). Pure-Go PDF parser: xref table parsing (classic + compressed streams), trailer extraction, page tree traversal, object resolution, FlateDecode decompression (compress/zlib), content stream operator parsing (Tj, TJ, ', "), PDF string escape handling (octal, line continuation). Returns ErrEncryptedPDF, ErrPDFNoText.
+
+**Task 4: PDF page rendering** — `internal/documents/render.go` (new). RenderPDFPages/RenderPDFPage shelling to pdftoppm (poppler) with gs (ghostscript) fallback. 60s timeout via exec.CommandContext.
+
+**Task 5: Mode detection** — `internal/documents/mode.go` (new). ResolveMode (string→Mode), EnoughText (≥100 chars), DetectAutoMode — decision tree: images prefer vision→OCR, PDF tests text extraction then vision→OCR→sparse text, text files always text_only.
+
+**Task 6: Chunking** — `internal/documents/chunk.go` (new). ChunkText (paragraph-aware on \n\n, word-boundary hard splits at maxSize), ChunkPages (reads page PNGs into ImageData bytes).
+
+**Task 7: Preparation queue** — `internal/documents/prepare_queue.go` (new). Fixed-size goroutine pool (buffered chan 100). prepare() pipeline: ExtractPDFText → DetectAutoMode → ChunkText or RenderPDFPages+ChunkPages. Handles text files (os.ReadFile+ChunkText) and images (single ChunkTypeImage chunk).
+
+**Task 8: Inference coordinator** — `internal/documents/inference.go` (new). Coordinator.Process: fan-out chunks as KindDocument (priority 30) jobs, buildChunkMessages (text content or base64 data URL images), collect ResultChans with context cancellation, combine results with "\n\n---\n\n" separators, aggregate token usage. Partial results returned if some chunks fail.
+
+**Task 9: Handler** — `internal/documents/handler.go` (new). ProcessHandler: multipart form parse → file type detection → spool → model resolution → mode resolution → PrepareTask → submit to prepare queue → await result → Coordinator.Process → JSON response. Defers temp file/page cleanup. Error responses at each stage (400/404/422/503/507).
+
+**Task 10: Wiring** — Modified `internal/httpapi/router.go` (NewRouter accepts prepareQueue, coordinator, docCfg; registers POST /proxy/documents/process when enabled). Modified `cmd/proxy/main.go` (creates/starts/stops PrepareQueue and Coordinator; passes to NewRouter). Updated main_test.go and router_test.go call sites.
+
+**Design decisions:**
+- Separate preparation queue (CPU-bound) from inference scheduler (LLM-bound) — prevents PDF parsing from blocking chat dispatch
+- Each chunk = one KindDocument job (priority 30 vs KindChat 100) — ensures documents never monopolize backends
+- Pure-Go PDF text extraction handles FlateDecode streams, classic xref tables, and xref streams — covers majority of PDFs
+- PDF rendering requires pdftoppm or gs CLI tools (available in Docker image)
+- Auto mode: text extraction first (cheap), then vision rendering (expensive), then OCR (fallback)
+- Worker pool defaults to 1, buffered to 100 tasks
+- Temp files cleaned via defer in handler
+
+**Global verification:**
+- `go vet ./...` — clean (11 packages)
+- `go test ./... -count=1` — 10/10 packages pass (documents has no tests yet)
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
 ## Open Questions
 
 (none yet)
@@ -392,3 +436,4 @@ Implemented `/v1/messages` (non-streaming + streaming) and `/v1/messages/count_t
 ---
 
 ## Live Stream
+- Created internal/documents/pdf.go — pure-Go PDF parser: xref table, object resolution, FlateDecode decompression, Tj/TJ text extraction, PDF escape decoding, ErrEncryptedPDF/ErrPDFNoText support
