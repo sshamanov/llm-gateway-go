@@ -1,5 +1,7 @@
 # Binaries
 bin/
+/mocktest
+/proxy
 *.exe
 *.exe~
 *.dll

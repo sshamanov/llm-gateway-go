@@ -20,12 +20,19 @@ func DebugSchedulerHandler(logger *logging.Logger, sched *scheduler.Scheduler) h
 		}
 		stats := sched.Stats.SnapshotAll()
 		queueSnap := sched.Queue.Snapshot(0)
+
+		// Convert struct-keyed map to string-keyed for JSON encoding.
+		stringStats := make(map[string]scheduler.BackendModelStats, len(stats))
+		for k, v := range stats {
+			stringStats[k.BackendID+"/"+k.ModelName] = v
+		}
+
 		resp := map[string]any{
 			"uptime_seconds": time.Since(sched.StartedAt).Seconds(),
 			"queue_total":    queueSnap.TotalJobs,
 			"queue_pending":  queueSnap.PendingCount,
 			"stats_count":    len(stats),
-			"stats":          stats,
+			"stats":          stringStats,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
