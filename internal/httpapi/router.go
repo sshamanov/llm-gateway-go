@@ -24,6 +24,7 @@ func NewRouter(
 	prepareQueue *documents.PrepareQueue,
 	coordinator *documents.Coordinator,
 	docCfg config.DocumentsConfig,
+	imageBackends []config.ImageBackendConfig,
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", HealthHandler(logger))
@@ -44,6 +45,7 @@ func NewRouter(
 			mux.Handle("POST /v1/chat/completions", openai.ChatCompletionsHandler(logger, registry, sched))
 			mux.Handle("POST /v1/responses", openai.ResponsesHandler(logger, registry, sched, paths.Uploads))
 			mux.Handle("POST /v1/messages", anthropic.MessagesHandler(logger, registry, sched))
+			mux.Handle("POST /v1/images/generations", openai.ImagesGenerationsHandler(logger, sched, imageBackends))
 		}
 		mux.Handle("POST /v1/messages/count_tokens", anthropic.CountTokensHandler(logger))
 	}

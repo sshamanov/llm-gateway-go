@@ -86,6 +86,15 @@ func NewBackendLeaseManager(backends []config.OllamaBackendConfig) *BackendLease
 	}
 }
 
+// AddBackend registers a backend with the given ID and max concurrent requests.
+// This allows non-Ollama backends (e.g., image, audio) to participate in
+// capacity tracking after construction.
+func (b *BackendLeaseManager) AddBackend(id string, maxConcurrent int32) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.maxConcurrent[id] = maxConcurrent
+}
+
 func (b *BackendLeaseManager) maxForBackend(backendID string) int32 {
 	if max, ok := b.maxConcurrent[backendID]; ok {
 		return max

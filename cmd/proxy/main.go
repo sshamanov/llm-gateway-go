@@ -66,6 +66,9 @@ func run() error {
 	}
 	schedHosts := scheduler.NewHostLeaseManager(cfg.Hosts)
 	schedBackends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
+	for _, ib := range cfg.ImageBackends {
+		schedBackends.AddBackend(ib.ID, int32(ib.MaxConcurrentRequests))
+	}
 	schedStats := scheduler.NewStatsTracker()
 	schedScorer := scheduler.NewScorer(schedStats, schedHosts, schedBackends, cfg.Scheduler)
 	sched := scheduler.NewScheduler(
@@ -88,7 +91,7 @@ func run() error {
 	// Document inference coordinator.
 	docCoordinator := documents.NewCoordinator(sched, logger)
 
-	router := httpapi.NewRouter(logger, registry, sched, paths, prepareQueue, docCoordinator, cfg.Documents)
+	router := httpapi.NewRouter(logger, registry, sched, paths, prepareQueue, docCoordinator, cfg.Documents, cfg.ImageBackends)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

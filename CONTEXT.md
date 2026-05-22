@@ -125,6 +125,8 @@ Dependency order: T1+T2+T4 (parallel) → T3 → T5 → T6.
 
 ### Milestone 8: documents (completed)
 
+### Milestone 9: image generation (completed)
+
 ### Milestone 6: Responses API (completed)
 
 ### Milestone 4: scheduler (completed)
@@ -416,6 +418,36 @@ Implemented `/proxy/documents/process` with multipart upload, PDF text extractio
 **Global verification:**
 - `go vet ./...` — clean (11 packages)
 - `go test ./... -count=1` — 10/10 packages pass (documents has no tests yet)
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
+---
+
+## 2026-05-22 — Milestone 9: Image Generation completed
+
+Implemented `/v1/images/generations` with image backend pool and host-aware scheduling. Handler acquires leases directly from scheduler's lease managers (bypasses queue) — image backends share host capacity with Ollama backends. 12 packages, all tests pass.
+
+**Task 1: AddBackend** — Modified `internal/scheduler/leases.go`. Added `AddBackend(id, maxConcurrent)` method to BackendLeaseManager for non-Ollama backends.
+
+**Task 2: Image generation package** — `internal/image/generation.go` (new). GenerationRequest/Response/Data types, GenerationError envelope, SendGeneration HTTP client (POST to {baseURL}/images/generations). 8 tests covering success, error, invalid JSON, unreachable, trailing slash, b64_json.
+
+**Task 3: Handler** — `internal/openai/images.go` (new). ImagesGenerationsHandler: read body (1MB limit) → decode → validate prompt → default N/Size/ResponseFormat → iterate image backends (acquire Host+Backend leases) → call SendGeneration → defer release → map response → 200 JSON. Returns 400 (invalid/missing fields), 503 (no backend available), 502 (backend error).
+
+**Task 4: Router** — Modified `internal/httpapi/router.go`. Added `imageBackends` param to NewRouter. Registered `POST /v1/images/generations` in sched != nil block.
+
+**Task 5: Wiring** — Modified `cmd/proxy/main.go`. Added image backends to BackendLeaseManager via AddBackend. Passed `cfg.ImageBackends` to NewRouter.
+
+**Design decisions:**
+- Handler bypasses scheduler queue — uses lease managers directly for host capacity sharing, avoiding image-specific dispatch logic in the Ollama-focused scheduler
+- Host and backend leases acquired together (releasing host on backend failure to avoid half-leak)
+- Default Size="1024x1024", N=1, ResponseFormat="url"
+- Image backend type is "openai_compatible" — SendGeneration POSTs to standard OpenAI images endpoint
+- If no image backend enabled, returns clean 503
+
+**Global verification:**
+- `go vet ./...` — clean (12 packages)
+- `go test ./... -count=1` — 11/12 packages pass (documents has no tests)
 - `go build -o bin/proxy ./cmd/proxy/` — succeeds
 
 ---
