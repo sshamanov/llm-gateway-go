@@ -7,12 +7,13 @@ import (
 	"llm-go-proxy/internal/logging"
 	"llm-go-proxy/internal/openai"
 	"llm-go-proxy/internal/scheduler"
+	"llm-go-proxy/internal/storage"
 )
 
 // NewRouter creates a new HTTP handler with all routes registered and
 // middleware applied. If registry is nil, registry-dependent routes
 // (/debug/backends, /debug/models, /v1/models) are not registered.
-func NewRouter(logger *logging.Logger, registry *backend.Registry, sched *scheduler.Scheduler) http.Handler {
+func NewRouter(logger *logging.Logger, registry *backend.Registry, sched *scheduler.Scheduler, paths storage.Paths) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", HealthHandler(logger))
 	mux.Handle("GET /readyz", ReadyHandler(logger))
@@ -24,6 +25,7 @@ func NewRouter(logger *logging.Logger, registry *backend.Registry, sched *schedu
 		mux.Handle("GET /v1/models", openai.ModelsHandler(logger, registry))
 		if sched != nil {
 			mux.Handle("POST /v1/chat/completions", openai.ChatCompletionsHandler(logger, registry, sched))
+			mux.Handle("POST /v1/responses", openai.ResponsesHandler(logger, registry, sched, paths.Uploads))
 		}
 	}
 

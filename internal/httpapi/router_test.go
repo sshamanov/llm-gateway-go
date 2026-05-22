@@ -9,6 +9,7 @@ import (
 
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
+	"llm-go-proxy/internal/storage"
 )
 
 // TestRouterEndpoints is a table-driven test covering healthz, readyz, and
@@ -17,7 +18,7 @@ func TestRouterEndpoints(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger, nil, nil)
+	handler := httpapi.NewRouter(logger, nil, nil, storage.Paths{})
 
 	tests := []struct {
 		name       string
@@ -80,7 +81,7 @@ func TestResponseIncludesRequestID(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger, nil, nil)
+	handler := httpapi.NewRouter(logger, nil, nil, storage.Paths{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -97,7 +98,7 @@ func TestRequestIDFormat(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger, nil, nil)
+	handler := httpapi.NewRouter(logger, nil, nil, storage.Paths{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -144,7 +145,7 @@ func TestUniqueRequestIDs(t *testing.T) {
 	t.Parallel()
 
 	logger := logging.NewLogger(logging.LevelDebug, "test")
-	handler := httpapi.NewRouter(logger, nil, nil)
+	handler := httpapi.NewRouter(logger, nil, nil, storage.Paths{})
 
 	ids := make([]string, 2)
 	for i := range ids {

@@ -79,7 +79,7 @@ func run() error {
 	sched.Start()
 	defer sched.Stop()
 
-	router := httpapi.NewRouter(logger, registry, sched)
+	router := httpapi.NewRouter(logger, registry, sched, paths)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

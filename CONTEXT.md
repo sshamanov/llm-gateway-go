@@ -121,6 +121,44 @@ Dependency order: T1 → T2 → T4 → T5; T3 parallel with T1+T2.
 
 Dependency order: T1+T2+T4 (parallel) → T3 → T5 → T6.
 
+### Milestone 6: Responses API (completed)
+
+**Overview**: 7 tasks implementing `/v1/responses` non-streaming + streaming. Translation layer: convert Responses API input → Chat messages → scheduler → map back to Responses shape.
+
+**Task 1: Add Images to ChatMessage** *(done directly)*
+- Files: modify `internal/ollama/types.go`
+- Add `Images []string` field with `json:"images,omitempty"` for Ollama vision support
+
+**Task 2: Responses types + input conversion** *(depends on T1)*
+- Files: `internal/openai/responses.go` (new)
+- Types: responsesRequest, responseInputItem, responseContentBlock, responsesResponse, responsesOutput, responsesOutputContent, responsesUsage
+- `convertInput(raw json.RawMessage, paths storage.Paths) ([]ollama.ChatMessage, *responsesFileMeta, error)` — string→[{user, content}], array→messages
+- `convertInstructions(instructions string, messages) []ollama.ChatMessage` — prepend system message
+
+**Task 3: Base64 inline file handling** *(in responses.go)*
+- Parse data URL, validate MIME, decode base64, spool to disk under storage.Paths.Uploads
+- Images: populate ChatMessage.Images; non-image files: error (deferred to M8)
+
+**Task 4: Non-streaming Responses handler** *(in responses.go)*
+- `ResponsesHandler(logger, registry, sched, paths) http.Handler`
+- Pipeline: decode → resolve → convertInput → convertInstructions → build options → create Job → Submit → await ResultChan → mapResponsesResponse
+- `mapResponsesResponse(ollamaResp, model) responsesResponse`
+
+**Task 5: Responses SSE types + writer** *(new file)*
+- Files: `internal/openai/sse_responses.go` (new)
+- sseResponseEvent with type discriminator (response.output_text.delta, response.done)
+- `writeSSEResponseEvent(w, event)` and `writeSSEDone(w)` (reuse from sse_chat.go — already in package)
+
+**Task 6: Streaming Responses handler path** *(in responses.go)*
+- `handleStreamResponses(w, r, logger, sched, model, candidates, alias, messages, options)`
+- SSE headers → streaming Job → read StreamCh → SSE events → [DONE]
+
+**Task 7: Wiring** *(modify router.go, main.go)*
+- NewRouter gets `paths storage.Paths` param; POST /v1/responses route
+- main.go passes paths to NewRouter
+
+Dependency order: T1 → T2+T3+T4 (same file) + T5 (parallel, needs type defs) → T6 → T7.
+
 ### Milestone 4: scheduler (completed)
 
 ### Milestone 6: Responses API
@@ -308,6 +346,34 @@ Implemented streaming chat completions with Ollama JSON-lines stream reader, SSE
 - `JobCtx` derived from request context; client disconnect cancels it, which cancels the Ollama HTTP request
 - `findStreamingBackend` temporarily sets job state to Pending because `ValidAssignments` only considers pending jobs
 - SSE headers sent before scheduler Submit; queue full is reported as SSE error event (not HTTP error, since headers already sent)
+
+**Global verification:**
+- `go vet ./...` — clean (9 packages)
+- `go test ./... -count=1` — 9/9 packages pass
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
+## 2026-05-22 — Milestone 6: Responses API completed
+
+Implemented `/v1/responses` non-streaming + streaming as a translation layer over the existing chat infrastructure. 9 packages, all tests pass.
+
+**Task 1: Images field** — Modified `internal/ollama/types.go`. Added `Images []string` with `json:"images,omitempty"` to `ChatMessage` for Ollama vision support.
+
+**Task 2-4: Responses handler** — `internal/openai/responses.go` (new). Types: responsesRequest, responseInputItem, responseContentBlock, responsesResponse, responsesOutput, responsesOutputContent, responsesUsage. `convertInput` handles string/array input forms. `convertInstructions` prepends/appends system message. `spoolBase64File` parses data URLs, validates MIME (image/png, image/jpeg, image/webp, image/gif), decodes base64, writes to upload dir, populates ChatMessage.Images. `ResponsesHandler` pipeline: decode → resolve → convert → build options → create Job → Submit → await ResultChan → map response. `mapResponsesResponse` (resp_ prefix, "response" object, output_text content). 19 tests including streaming, client disconnect, queue full, conversion unit tests.
+
+**Task 5: Responses SSE writer** — `internal/openai/sse_responses.go` (new). `sseResponseEvent` with type discriminator (response.output_text.delta, response.done). `writeSSEResponseEvent`. Reuses `writeSSEDone` from sse_chat.go.
+
+**Task 6: Streaming handler** — `handleStreamResponses` in responses.go. SSE headers → streaming Job → read StreamCh → response.output_text.delta events → terminal response.done event with full response → [DONE].
+
+**Task 7: Wiring** — Modified `internal/httpapi/router.go` (NewRouter accepts `paths storage.Paths`, registers `POST /v1/responses`). Modified `cmd/proxy/main.go` (passes paths). Updated test files.
+
+**Design decisions:**
+- Translation layer approach: Responses API translates to chat, reuses scheduler KindChat — no new scheduler logic
+- Images use ChatMessage.Images field (Ollama vision format) — base64 data passed inline
+- Non-image files return error (deferred to M8 documents milestone)
+- Streaming uses typed SSE events (response.output_text.delta / response.done) unlike chat's fixed-structure chunks
+- Temp file cleanup via defer after job completes
 
 **Global verification:**
 - `go vet ./...` — clean (9 packages)
