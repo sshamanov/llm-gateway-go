@@ -491,25 +491,8 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 
 - 2026-05-21: Adopted ARCHITECTURE.md/DESIGN.md split from image-server's single README.md architecture pattern. README.md stays as simple repo front door.
 - 2026-05-21: Implementation follows ARCHITECTURE.md §25 milestone order — skeleton first, each milestone builds on the previous.
+- 2026-05-22: All 10 milestones complete. M10 wired /metrics (Prometheus), /debug dashboard (embed), and 4 debug JSON endpoints. 13 packages, all passing.
 
 ---
 
 ## Live Stream
-- Created internal/documents/pdf.go — pure-Go PDF parser: xref table, object resolution, FlateDecode decompression, Tj/TJ text extraction, PDF escape decoding, ErrEncryptedPDF/ErrPDFNoText support
-- Created internal/metrics/metrics.go — Counter, Gauge, MetricFamily, Registry with thread-safe Collect
-- Created internal/metrics/export.go — RenderPrometheus writes Prometheus exposition format with sorted families and labels
-- Created internal/metrics/collector.go — Collector reads scheduler/backend state at scrape time, emits 16 dynamic metric families
-- Created internal/metrics/handler.go — HTTP handler for GET /metrics with Prometheus Content-Type
-- Created internal/metrics/metrics_test.go — 8 tests: Counter, Gauge, Registry, type mismatch panic, Prometheus rendering w/ and w/o labels, HTTP handler, nil collector safety
-- Verified: go vet clean, go test 8/8 pass, go build succeeds
-- Created internal/httpapi/debug_queue.go — DebugQueueHandler returning QueueSnapshot as JSON, nil-safe
-- Created internal/httpapi/debug_scheduler.go — DebugSchedulerHandler returning uptime/queue/stats as JSON
-- Created internal/httpapi/debug_hosts.go — DebugHostsHandler returning host capacity states as JSON
-- Created internal/httpapi/debug_config.go — DebugConfigHandler returning full Config as JSON
-- Created internal/debugui/handler.go — embed-based static file server for debug dashboard
-- Created internal/debugui/static/index.html, style.css, app.js — dark-themed polling dashboard with 6 panels and per-endpoint intervals
-- Wired router.go: added metricsHandler, debugUIHandler, cfg params; registered /metrics, /debug/queue, /debug/scheduler, /debug/hosts, /debug/config, /debug/ and /debug redirect
-- Wired main.go: created metrics Registry/Collector/Handler and debug UI Handler; passed to NewRouter
-- Fixed router_test.go and main_test.go with updated NewRouter signature (nil params for test context)
-- Global verification: go vet clean (13 packages), go test all pass (13 packages), go build succeeds
-- M10 complete — all 5 phases executed
