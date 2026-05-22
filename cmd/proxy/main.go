@@ -11,9 +11,11 @@ import (
 
 	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/config"
+	"llm-go-proxy/internal/debugui"
 	"llm-go-proxy/internal/documents"
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
+	"llm-go-proxy/internal/metrics"
 	"llm-go-proxy/internal/scheduler"
 	"llm-go-proxy/internal/storage"
 )
@@ -91,7 +93,15 @@ func run() error {
 	// Document inference coordinator.
 	docCoordinator := documents.NewCoordinator(sched, logger)
 
-	router := httpapi.NewRouter(logger, registry, sched, paths, prepareQueue, docCoordinator, cfg.Documents, cfg.ImageBackends)
+	// Metrics — Prometheus-compatible pull-based collector.
+	metricsReg := metrics.NewRegistry()
+	metricsCollector := metrics.NewCollector(metricsReg, schedStats, sched.Queue, schedHosts, schedBackends, sched, registry)
+	metricsHandler := metrics.Handler(metricsCollector)
+
+	// Debug UI — static dashboard served via embed.
+	debugUIHandler := debugui.Handler()
+
+	router := httpapi.NewRouter(logger, registry, sched, paths, prepareQueue, docCoordinator, cfg.Documents, cfg.ImageBackends, metricsHandler, debugUIHandler, &cfg)
 
 	srv := &http.Server{
 		Addr:           listenAddr,

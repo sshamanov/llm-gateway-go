@@ -46,7 +46,7 @@ func TestServerHealthAndReadinessEndpoints(t *testing.T) {
 	}
 
 	logger := logging.NewLogger(logging.LevelDebug, "proxy-test")
-	router := httpapi.NewRouter(logger, nil, nil, storage.Paths{}, nil, nil, config.DocumentsConfig{}, nil)
+	router := httpapi.NewRouter(logger, nil, nil, storage.Paths{}, nil, nil, config.DocumentsConfig{}, nil, nil, nil, nil)
 
 	srv := &http.Server{
 		Handler:        router,

@@ -25,10 +25,34 @@ func NewRouter(
 	coordinator *documents.Coordinator,
 	docCfg config.DocumentsConfig,
 	imageBackends []config.ImageBackendConfig,
+	metricsHandler http.Handler,
+	debugUIHandler http.Handler,
+	cfg *config.Config,
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", HealthHandler(logger))
 	mux.Handle("GET /readyz", ReadyHandler(logger))
+
+	// Metrics endpoint.
+	if metricsHandler != nil {
+		mux.Handle("GET /metrics", metricsHandler)
+	}
+
+	// Debug endpoints.
+	if sched != nil {
+		mux.Handle("GET /debug/queue", DebugQueueHandler(logger, sched.Queue))
+		mux.Handle("GET /debug/scheduler", DebugSchedulerHandler(logger, sched))
+		mux.Handle("GET /debug/hosts", DebugHostsHandler(logger, sched.Scorer.Hosts))
+	}
+	if cfg != nil {
+		mux.Handle("GET /debug/config", DebugConfigHandler(logger, cfg))
+	}
+
+	// Debug UI — static dashboard at /debug/.
+	if debugUIHandler != nil {
+		mux.Handle("GET /debug/", http.StripPrefix("/debug", debugUIHandler))
+		mux.Handle("GET /debug", http.RedirectHandler("/debug/", http.StatusMovedPermanently))
+	}
 
 	// Document processing route.
 	if docCfg.Enabled && prepareQueue != nil && coordinator != nil && registry != nil {

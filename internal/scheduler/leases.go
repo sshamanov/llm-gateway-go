@@ -135,3 +135,47 @@ func (b *BackendLeaseManager) BackendFreeCapacity(backendID string) int {
 	defer b.mu.Unlock()
 	return int(b.maxForBackend(backendID) - b.active[backendID])
 }
+
+// HostState is a point-in-time snapshot of host capacity.
+type HostState struct {
+	HostID     string `json:"host_id"`
+	ActiveJobs int    `json:"active_jobs"`
+	Capacity   int    `json:"capacity"`
+}
+
+// States returns a slice of host states for all known hosts.
+func (h *HostLeaseManager) States() []HostState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	states := make([]HostState, 0, len(h.maxJobs))
+	for hostID, max := range h.maxJobs {
+		states = append(states, HostState{
+			HostID:     hostID,
+			ActiveJobs: int(h.active[hostID]),
+			Capacity:   int(max),
+		})
+	}
+	return states
+}
+
+// BackendLeaseState is a point-in-time snapshot of backend capacity.
+type BackendLeaseState struct {
+	BackendID  string `json:"backend_id"`
+	ActiveJobs int    `json:"active_jobs"`
+	Capacity   int    `json:"capacity"`
+}
+
+// States returns a slice of backend capacity states for all known backends.
+func (b *BackendLeaseManager) States() []BackendLeaseState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	states := make([]BackendLeaseState, 0, len(b.maxConcurrent))
+	for backendID, max := range b.maxConcurrent {
+		states = append(states, BackendLeaseState{
+			BackendID:  backendID,
+			ActiveJobs: int(b.active[backendID]),
+			Capacity:   int(max),
+		})
+	}
+	return states
+}

@@ -28,6 +28,24 @@ func (k JobKind) Priority() int {
 	return int(k)
 }
 
+// String returns a human-readable name for the job kind.
+func (k JobKind) String() string {
+	switch k {
+	case KindChat:
+		return "chat"
+	case KindTool:
+		return "tool_vision"
+	case KindImageGeneration:
+		return "image_generation"
+	case KindAudio:
+		return "audio"
+	case KindDocument:
+		return "document"
+	default:
+		return "unknown"
+	}
+}
+
 // JobState represents the lifecycle state of a job.
 type JobState int
 
@@ -37,6 +55,22 @@ const (
 	StateCompleted
 	StateFailed
 )
+
+// String returns a human-readable name for the job state.
+func (s JobState) String() string {
+	switch s {
+	case StatePending:
+		return "pending"
+	case StateRunning:
+		return "running"
+	case StateCompleted:
+		return "completed"
+	case StateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
 
 // Job represents a single request to be processed by a backend.
 type Job struct {

@@ -31,6 +31,7 @@ type Scheduler struct {
 	Wg          sync.WaitGroup
 	Wakeup      chan struct{} // buffered cap 1, signals dispatch to re-evaluate
 	Snapshots   func() []backend.BackendSnapshot
+	StartedAt   time.Time
 }
 
 // NewScheduler creates a new Scheduler with the given components.
@@ -55,6 +56,7 @@ func NewScheduler(
 		Cancel:      cancel,
 		Wakeup:      make(chan struct{}, 1),
 		Snapshots:   snapshots,
+		StartedAt:   time.Now(),
 	}
 }
 

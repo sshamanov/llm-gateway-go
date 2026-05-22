@@ -1,0 +1,211 @@
+(function() {
+  'use strict';
+
+  const POLL_INTERVALS = {
+    backends: 2000,
+    hosts: 2000,
+    queue: 2000,
+    scheduler: 3000,
+    models: 10000,
+    config: 30000
+  };
+
+  let lastUpdate = null;
+
+  function formatUptime(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}h ${m}m ${s}s`;
+  }
+
+  function badgeClass(status) {
+    const map = {
+      healthy: 'badge-healthy', degraded: 'badge-degraded',
+      down: 'badge-down', disabled: 'badge-disabled',
+      full: 'badge-full', available: 'badge-available'
+    };
+    return map[status] || '';
+  }
+
+  async function fetchJSON(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`${url}: ${resp.status}`);
+    return resp.json();
+  }
+
+  // ---- Backends Panel ----
+  async function updateBackends() {
+    const el = document.getElementById('backends-content');
+    try {
+      const data = await fetchJSON('/debug/backends');
+      if (!data || !data.backends) { el.innerHTML = '<p>No backends</p>'; return; }
+      let html = '<table><thead><tr><th>ID</th><th>Type</th><th>Health</th><th>Active</th><th>Models</th></tr></thead><tbody>';
+      for (const b of data.backends) {
+        const health = b.healthy ? 'healthy' : (b.enabled ? 'down' : 'disabled');
+        html += `<tr>
+          <td>${b.id || b.backend_id || '-'}</td>
+          <td>${b.type || 'ollama'}</td>
+          <td><span class="badge ${badgeClass(health)}">${health}</span></td>
+          <td>${b.active_jobs ?? '-'}</td>
+          <td>${(b.loaded_models || []).join(', ') || '-'}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Hosts Panel ----
+  async function updateHosts() {
+    const el = document.getElementById('hosts-content');
+    try {
+      const data = await fetchJSON('/debug/hosts');
+      if (!data || !data.hosts) { el.innerHTML = '<p>No hosts</p>'; return; }
+      let html = '<table><thead><tr><th>Host</th><th>Active</th><th>Capacity</th><th>Status</th></tr></thead><tbody>';
+      for (const h of data.hosts) {
+        const status = h.active_jobs >= h.capacity ? 'full' : 'available';
+        html += `<tr>
+          <td>${h.host_id}</td>
+          <td>${h.active_jobs}</td>
+          <td>${h.capacity}</td>
+          <td><span class="badge ${badgeClass(status)}">${status}</span></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Queue Panel ----
+  async function updateQueue() {
+    const el = document.getElementById('queue-content');
+    try {
+      const data = await fetchJSON('/debug/queue');
+      if (!data || !data.queue) { el.innerHTML = '<p>Queue unavailable</p>'; return; }
+      const q = data.queue;
+      let html = `<p>Total: ${q.total_jobs} | Pending: ${q.pending_count}</p>`;
+      if (q.by_kind) {
+        html += '<p>By kind: ';
+        for (const [k, v] of Object.entries(q.by_kind)) {
+          html += `${k}: ${v} `;
+        }
+        html += '</p>';
+      }
+      if (q.top_jobs && q.top_jobs.length > 0) {
+        html += '<table><thead><tr><th>ID</th><th>Kind</th><th>State</th><th>Age</th><th>Model</th></tr></thead><tbody>';
+        for (const j of q.top_jobs) {
+          html += `<tr>
+            <td>${j.id.substring(0, 8)}</td>
+            <td>${j.kind}</td>
+            <td>${j.state}</td>
+            <td>${(j.age_ms / 1000).toFixed(1)}s</td>
+            <td>${j.requested_model}</td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+      }
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Scheduler Panel ----
+  async function updateScheduler() {
+    const el = document.getElementById('scheduler-content');
+    try {
+      const data = await fetchJSON('/debug/scheduler');
+      if (!data || !data.scheduler) { el.innerHTML = '<p>No data</p>'; return; }
+      const s = data.scheduler;
+      document.getElementById('uptime').textContent = `Uptime: ${formatUptime(s.uptime_seconds || 0)}`;
+      document.getElementById('health').textContent = s.queue_pending > 10 ? 'busy' : 'healthy';
+      document.getElementById('health').className = `badge ${badgeClass(s.queue_pending > 10 ? 'degraded' : 'healthy')}`;
+
+      let html = `<p>Queue: ${s.queue_total} total / ${s.queue_pending} pending</p>`;
+      html += `<p>Stats entries: ${s.stats_count || 0}</p>`;
+      if (s.stats) {
+        html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>TTFT (s)</th><th>Cold Load (s)</th></tr></thead><tbody>';
+        for (const [key, v] of Object.entries(s.stats)) {
+          html += `<tr>
+            <td>${key}</td>
+            <td>${v.samples || 0}</td>
+            <td>${(v.tps || 0).toFixed(1)}</td>
+            <td>${(v.ttft_seconds || 0).toFixed(2)}</td>
+            <td>${(v.cold_load_seconds || 0).toFixed(2)}</td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+      }
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Models Panel ----
+  async function updateModels() {
+    const el = document.getElementById('models-content');
+    try {
+      const data = await fetchJSON('/debug/models');
+      if (!data) { el.innerHTML = '<p>No data</p>'; return; }
+      let html = '';
+      if (data.aliases) {
+        html += '<h3>Aliases</h3><ul>';
+        for (const a of data.aliases) {
+          html += `<li>${a}</li>`;
+        }
+        html += '</ul>';
+      }
+      if (data.native_models) {
+        html += '<h3>Native</h3><p>' + data.native_models.join(', ') + '</p>';
+      }
+      el.innerHTML = html || '<p>No models</p>';
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Stats Panel (uses scheduler data) ----
+  async function updateStats() {
+    // Stats are shown in scheduler panel; this panel shows config summary.
+    const el = document.getElementById('stats-content');
+    try {
+      const data = await fetchJSON('/debug/config');
+      if (!data || !data.config) { el.innerHTML = '<p>No config</p>'; return; }
+      const c = data.config;
+      let html = '<table>';
+      if (c.server) {
+        html += `<tr><td>Request Timeout</td><td>${c.server.request_timeout_seconds}s</td></tr>`;
+        html += `<tr><td>Debug Logging</td><td>${c.server.enable_debug_logging}</td></tr>`;
+      }
+      if (c.scheduler) {
+        html += `<tr><td>Scheduler Strategy</td><td>${c.scheduler.strategy}</td></tr>`;
+        html += `<tr><td>Queue Max</td><td>${c.scheduler.queue_max_pending}</td></tr>`;
+        html += `<tr><td>Aging/s</td><td>${c.scheduler.aging_per_second}</td></tr>`;
+        html += `<tr><td>Retry Max</td><td>${c.scheduler.retry.max_attempts}</td></tr>`;
+      }
+      html += '</table>';
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  function updateTimestamp() {
+    document.getElementById('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  }
+
+  // Polling loop
+  function poll() {
+    updateBackends();
+    updateHosts();
+    updateQueue();
+    updateScheduler();
+    updateModels();
+    updateStats();
+    updateTimestamp();
+  }
+
+  // Initial load then poll
+  poll();
+  setInterval(updateBackends, POLL_INTERVALS.backends);
+  setInterval(updateHosts, POLL_INTERVALS.hosts);
+  setInterval(updateQueue, POLL_INTERVALS.queue);
+  setInterval(updateScheduler, POLL_INTERVALS.scheduler);
+  setInterval(updateModels, POLL_INTERVALS.models);
+  setInterval(updateStats, POLL_INTERVALS.config);
+  setInterval(updateTimestamp, 1000);
+})();

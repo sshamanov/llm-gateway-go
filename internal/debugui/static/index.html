@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Go Proxy — Debug Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>LLM Go Proxy</h1>
+    <div id="status-bar">
+      <span id="uptime">--</span>
+      <span id="health" class="badge">checking...</span>
+    </div>
+  </header>
+
+  <main>
+    <section id="panel-backends" class="panel">
+      <h2>Backends</h2>
+      <div class="panel-content" id="backends-content">...</div>
+    </section>
+
+    <section id="panel-hosts" class="panel">
+      <h2>Hosts</h2>
+      <div class="panel-content" id="hosts-content">...</div>
+    </section>
+
+    <section id="panel-models" class="panel">
+      <h2>Models</h2>
+      <div class="panel-content" id="models-content">...</div>
+    </section>
+
+    <section id="panel-queue" class="panel">
+      <h2>Queue</h2>
+      <div class="panel-content" id="queue-content">...</div>
+    </section>
+
+    <section id="panel-scheduler" class="panel">
+      <h2>Scheduler</h2>
+      <div class="panel-content" id="scheduler-content">...</div>
+    </section>
+
+    <section id="panel-stats" class="panel">
+      <h2>Learned Stats</h2>
+      <div class="panel-content" id="stats-content">...</div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="last-update">--</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

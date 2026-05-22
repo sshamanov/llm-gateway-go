@@ -126,3 +126,67 @@ func (q *Queue) PendingCount() int {
 	}
 	return count
 }
+
+// QueueSnapshot is a point-in-time view of the queue for debug/metrics.
+type QueueSnapshot struct {
+	TotalJobs    int            `json:"total_jobs"`
+	PendingCount int            `json:"pending_count"`
+	ByKind       map[string]int `json:"by_kind"`
+	OldestWaitMs int64          `json:"oldest_wait_ms"`
+	TopJobs      []JobSummary   `json:"top_jobs"`
+}
+
+// JobSummary is a short representation of a job suitable for debug output.
+type JobSummary struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Priority       int    `json:"priority"`
+	State          string `json:"state"`
+	AgeMs          int64  `json:"age_ms"`
+	RequestedModel string `json:"requested_model"`
+}
+
+// Snapshot returns a point-in-time view of the queue, limited to at most n top jobs.
+func (q *Queue) Snapshot(n int) QueueSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	snap := QueueSnapshot{
+		TotalJobs: q.items.Len(),
+		ByKind:    make(map[string]int),
+	}
+	now := time.Now()
+
+	var oldest time.Time
+	for _, job := range q.items.items {
+		snap.ByKind[job.Kind.String()]++
+		if job.State == StatePending {
+			snap.PendingCount++
+		}
+		if oldest.IsZero() || job.CreatedAt.Before(oldest) {
+			oldest = job.CreatedAt
+		}
+	}
+
+	if !oldest.IsZero() {
+		snap.OldestWaitMs = now.Sub(oldest).Milliseconds()
+	}
+
+	if n > q.items.Len() {
+		n = q.items.Len()
+	}
+	snap.TopJobs = make([]JobSummary, n)
+	for i := 0; i < n; i++ {
+		job := q.items.items[i]
+		snap.TopJobs[i] = JobSummary{
+			ID:             job.ID,
+			Kind:           job.Kind.String(),
+			Priority:       job.Priority,
+			State:          job.State.String(),
+			AgeMs:          now.Sub(job.CreatedAt).Milliseconds(),
+			RequestedModel: job.RequestedModel,
+		}
+	}
+
+	return snap
+}
