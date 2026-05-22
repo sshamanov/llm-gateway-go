@@ -121,43 +121,9 @@ Dependency order: T1 → T2 → T4 → T5; T3 parallel with T1+T2.
 
 Dependency order: T1+T2+T4 (parallel) → T3 → T5 → T6.
 
+### Milestone 7: Anthropic Messages API (completed)
+
 ### Milestone 6: Responses API (completed)
-
-**Overview**: 7 tasks implementing `/v1/responses` non-streaming + streaming. Translation layer: convert Responses API input → Chat messages → scheduler → map back to Responses shape.
-
-**Task 1: Add Images to ChatMessage** *(done directly)*
-- Files: modify `internal/ollama/types.go`
-- Add `Images []string` field with `json:"images,omitempty"` for Ollama vision support
-
-**Task 2: Responses types + input conversion** *(depends on T1)*
-- Files: `internal/openai/responses.go` (new)
-- Types: responsesRequest, responseInputItem, responseContentBlock, responsesResponse, responsesOutput, responsesOutputContent, responsesUsage
-- `convertInput(raw json.RawMessage, paths storage.Paths) ([]ollama.ChatMessage, *responsesFileMeta, error)` — string→[{user, content}], array→messages
-- `convertInstructions(instructions string, messages) []ollama.ChatMessage` — prepend system message
-
-**Task 3: Base64 inline file handling** *(in responses.go)*
-- Parse data URL, validate MIME, decode base64, spool to disk under storage.Paths.Uploads
-- Images: populate ChatMessage.Images; non-image files: error (deferred to M8)
-
-**Task 4: Non-streaming Responses handler** *(in responses.go)*
-- `ResponsesHandler(logger, registry, sched, paths) http.Handler`
-- Pipeline: decode → resolve → convertInput → convertInstructions → build options → create Job → Submit → await ResultChan → mapResponsesResponse
-- `mapResponsesResponse(ollamaResp, model) responsesResponse`
-
-**Task 5: Responses SSE types + writer** *(new file)*
-- Files: `internal/openai/sse_responses.go` (new)
-- sseResponseEvent with type discriminator (response.output_text.delta, response.done)
-- `writeSSEResponseEvent(w, event)` and `writeSSEDone(w)` (reuse from sse_chat.go — already in package)
-
-**Task 6: Streaming Responses handler path** *(in responses.go)*
-- `handleStreamResponses(w, r, logger, sched, model, candidates, alias, messages, options)`
-- SSE headers → streaming Job → read StreamCh → SSE events → [DONE]
-
-**Task 7: Wiring** *(modify router.go, main.go)*
-- NewRouter gets `paths storage.Paths` param; POST /v1/responses route
-- main.go passes paths to NewRouter
-
-Dependency order: T1 → T2+T3+T4 (same file) + T5 (parallel, needs type defs) → T6 → T7.
 
 ### Milestone 4: scheduler (completed)
 
@@ -378,6 +344,34 @@ Implemented `/v1/responses` non-streaming + streaming as a translation layer ove
 **Global verification:**
 - `go vet ./...` — clean (9 packages)
 - `go test ./... -count=1` — 9/9 packages pass
+- `go build -o bin/proxy ./cmd/proxy/` — succeeds
+
+---
+
+## 2026-05-22 — Milestone 7: Anthropic Messages API completed
+
+Implemented `/v1/messages` (non-streaming + streaming) and `/v1/messages/count_tokens` as a translation layer over the existing chat infrastructure. 10 packages, all tests pass.
+
+**Task 1: Types + TopK** — Modified `internal/ollama/types.go`. Added `TopK int` to ChatOptions. Created `internal/anthropic/` directory.
+
+**Task 2+4: Messages handler** — `internal/anthropic/messages.go` (new, 657 lines). Types: anthropicMessageRequest, anthropicInputMessage, anthropicContentBlockSource, anthropicImageSource, anthropicThinkingConfig, anthropicMessageResponse, anthropicResponseBlock, anthropicUsage, anthropicErrorResponse. Conversion: convertInputMessages (string or content blocks → Ollama ChatMessage), convertSystem (string or text block array → system message), convertContentBlocks (text/image/tool blocks). MessagesHandler pipeline: read body → JSON decode → validate model/max_tokens → resolve model → convert system → convert messages → build options → streaming branch → Job → Submit → await result → map response. handleStreamAnthropic: SSE events (content_block_start/delta/stop, message_delta, message_stop, [DONE]). Helpers: writeAnthropicError, generateAnthropicID (msg_ prefix), mapStopReason (stop→end_turn, length→max_tokens). 26 tests.
+
+**Task 3: SSE writer** — `internal/anthropic/sse_messages.go` (new). Types: sseContentBlockStart, sseContentBlockDelta, anthropicTextDelta, sseContentBlockStop, sseMessageDelta, anthropicStopDelta, sseMessageStop. writeAnthropicSSEEvent(w, eventType, data) — writes `event: <type>\ndata: <json>\n\n` and flushes. writeAnthropicSSEDone — writes `data: [DONE]\n\n`.
+
+**Task 5: Count tokens** — `internal/anthropic/count_tokens.go` + test (new). countTokensRequest/Response types. CountTokensHandler: bytes/4 approximation over messages content + system. 5 tests.
+
+**Task 6: Wiring** — Modified `internal/httpapi/router.go`. Added anthropic import. Registered `POST /v1/messages` (in sched != nil block) and `POST /v1/messages/count_tokens` (registry != nil block).
+
+**Design decisions:**
+- Translation layer approach: Anthropic Messages API translates to chat, reuses scheduler KindChat — no new scheduler logic
+- Anthropic SSE uses named events (`event:` lines) unlike OpenAI's fixed-structure chunks or Responses' typed events
+- Thinking config with `"enabled"` forces Temperature=1.0 (per Anthropic API spec)
+- Count tokens uses bytes/4 approximation (same heuristic as both OpenAI and Anthropic)
+- Options merging: defaults → alias overrides → MaxTokens → client overrides (if policy allows) → thinking override
+
+**Global verification:**
+- `go vet ./...` — clean (10 packages)
+- `go test ./... -count=1` — 10/10 packages pass
 - `go build -o bin/proxy ./cmd/proxy/` — succeeds
 
 ---

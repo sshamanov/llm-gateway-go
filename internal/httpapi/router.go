@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 
+	"llm-go-proxy/internal/anthropic"
 	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/logging"
 	"llm-go-proxy/internal/openai"
@@ -26,7 +27,9 @@ func NewRouter(logger *logging.Logger, registry *backend.Registry, sched *schedu
 		if sched != nil {
 			mux.Handle("POST /v1/chat/completions", openai.ChatCompletionsHandler(logger, registry, sched))
 			mux.Handle("POST /v1/responses", openai.ResponsesHandler(logger, registry, sched, paths.Uploads))
+			mux.Handle("POST /v1/messages", anthropic.MessagesHandler(logger, registry, sched))
 		}
+		mux.Handle("POST /v1/messages/count_tokens", anthropic.CountTokensHandler(logger))
 	}
 
 	var h http.Handler = mux
