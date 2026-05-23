@@ -1,6 +1,6 @@
 # Project Context
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 ---
 
@@ -492,6 +492,8 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 - 2026-05-21: Adopted ARCHITECTURE.md/DESIGN.md split from image-server's single README.md architecture pattern. README.md stays as simple repo front door.
 - 2026-05-21: Implementation follows ARCHITECTURE.md §25 milestone order — skeleton first, each milestone builds on the previous.
 - 2026-05-22: All 10 milestones complete. M10 wired /metrics (Prometheus), /debug dashboard (embed), and 4 debug JSON endpoints. 13 packages, all passing.
+- 2026-05-22: Mock E2E testing system (M11) implemented — 14 scenarios across 7 categories, all passing. FakeOllama wraps httptest.Server, harness mirrors main.go component setup, proxy runs in-process. Fixed bug in debug_scheduler.go (struct-keyed map → string-keyed for JSON). Pushed to origin.
+- 2026-05-24: Added config.example.json reference file with all config options at repo root. Added SaveConfig() to config package. LoadConfig now auto-writes default config.json when file is missing. EnsureDirs creates config/ subdirectory. First run with empty storage dir works out of box.
 
 ---
 
