@@ -66,7 +66,8 @@ func run() error {
 			backendURLs[bc.ID] = bc.URL
 		}
 	}
-	schedHosts := scheduler.NewHostLeaseManager(cfg.Hosts)
+	backendHosts := collectBackendHosts(&cfg)
+	schedHosts := scheduler.NewHostLeaseManager(cfg.Hosts, backendHosts...)
 	schedBackends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
 	for _, ib := range cfg.ImageBackends {
 		schedBackends.AddBackend(ib.ID, int32(ib.MaxConcurrentRequests))
@@ -148,4 +149,29 @@ func run() error {
 
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// collectBackendHosts returns deduplicated host IDs from all configured backends.
+func collectBackendHosts(cfg *config.Config) []string {
+	seen := make(map[string]bool)
+	var hosts []string
+	for _, b := range cfg.OllamaBackends {
+		if b.Host != "" && !seen[b.Host] {
+			seen[b.Host] = true
+			hosts = append(hosts, b.Host)
+		}
+	}
+	for _, b := range cfg.ImageBackends {
+		if b.Host != "" && !seen[b.Host] {
+			seen[b.Host] = true
+			hosts = append(hosts, b.Host)
+		}
+	}
+	for _, b := range cfg.AudioBackends {
+		if b.Host != "" && !seen[b.Host] {
+			seen[b.Host] = true
+			hosts = append(hosts, b.Host)
+		}
+	}
+	return hosts
 }

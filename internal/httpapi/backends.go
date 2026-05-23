@@ -22,7 +22,7 @@ func DebugBackendsHandler(logger *logging.Logger, registry *backend.Registry) ht
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{"data": snapshots})
+		json.NewEncoder(w).Encode(map[string]interface{}{"backends": snapshots})
 		logger.Debug("debug backends")
 	})
 }

@@ -13,12 +13,21 @@ type HostLeaseManager struct {
 	maxJobs map[string]int32 // capacity per host from config
 }
 
-// NewHostLeaseManager creates a HostLeaseManager from host configs.
-// Unknown hosts default to maxActiveJobs=1.
-func NewHostLeaseManager(hosts []config.HostConfig) *HostLeaseManager {
-	maxJobs := make(map[string]int32, len(hosts))
+// NewHostLeaseManager creates a HostLeaseManager from host configs and
+// optional backend host IDs. Backend hosts not already in the explicit
+// hosts list are added with maxActiveJobs=1 so minimal configs can omit
+// the hosts section entirely.
+// Unknown hosts (not in config and not in backendHosts) also default to
+// maxActiveJobs=1 via maxForHost.
+func NewHostLeaseManager(hosts []config.HostConfig, backendHosts ...string) *HostLeaseManager {
+	maxJobs := make(map[string]int32, len(hosts)+len(backendHosts))
 	for _, h := range hosts {
 		maxJobs[h.ID] = int32(h.MaxActiveJobs)
+	}
+	for _, hostID := range backendHosts {
+		if _, exists := maxJobs[hostID]; !exists {
+			maxJobs[hostID] = 1
+		}
 	}
 	return &HostLeaseManager{
 		active:  make(map[string]int32),

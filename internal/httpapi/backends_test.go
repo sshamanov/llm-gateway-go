@@ -32,12 +32,12 @@ func TestDebugBackendsHandler_NilRegistry(t *testing.T) {
 		t.Fatalf("invalid JSON body: %v", err)
 	}
 
-	data, ok := body["data"].([]interface{})
+	data, ok := body["backends"].([]interface{})
 	if !ok {
-		t.Fatalf("expected 'data' to be an array, got %T", body["data"])
+		t.Fatalf("expected 'backends' to be an array, got %T", body["backends"])
 	}
 	if len(data) != 0 {
-		t.Errorf("expected empty data array, got %d elements", len(data))
+		t.Errorf("expected empty backends array, got %d elements", len(data))
 	}
 }
 
@@ -68,9 +68,9 @@ func TestDebugBackendsHandler_ReturnsBackends(t *testing.T) {
 		t.Fatalf("invalid JSON body: %v", err)
 	}
 
-	data, ok := body["data"].([]interface{})
+	data, ok := body["backends"].([]interface{})
 	if !ok {
-		t.Fatalf("expected 'data' to be an array, got %T", body["data"])
+		t.Fatalf("expected 'backends' to be an array, got %T", body["backends"])
 	}
 	if len(data) != 2 {
 		t.Errorf("expected 2 backends, got %d", len(data))
