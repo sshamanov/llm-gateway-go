@@ -33,9 +33,8 @@ func NewPaths(root string) Paths {
 	}
 }
 
-// EnsureDirs creates all subdirectories (not Root itself and not the parent of
-// ConfigFile) with mode 0755. Returns an error if Root does not exist or if
-// any directory creation fails.
+// EnsureDirs creates all subdirectories (not Root itself) with mode 0755.
+// Returns an error if Root does not exist or if any directory creation fails.
 func (p Paths) EnsureDirs() error {
 	// Defensive check: the root directory must already exist (e.g. created by
 	// Docker volume mount).
@@ -51,6 +50,7 @@ func (p Paths) EnsureDirs() error {
 	}
 
 	dirs := []string{
+		filepath.Dir(p.ConfigFile),
 		p.Tmp,
 		p.Cache,
 		p.Uploads,

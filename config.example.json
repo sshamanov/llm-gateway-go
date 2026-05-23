@@ -1,0 +1,110 @@
+{
+  "server": {
+    "request_timeout_seconds": 900,
+    "max_request_body_bytes": 10485760,
+    "enable_request_logging": true,
+    "enable_debug_logging": false
+  },
+  "hosts": [
+    {
+      "id": "default",
+      "max_active_jobs": 1
+    }
+  ],
+  "ollama_backends": [
+    {
+      "id": "ollama-main",
+      "url": "http://127.0.0.1:11434",
+      "host": "default",
+      "max_concurrent_requests": 1,
+      "enabled": true
+    }
+  ],
+  "image_backends": [
+    {
+      "id": "image-main",
+      "type": "openai_compatible",
+      "url": "http://127.0.0.1:8080/v1",
+      "host": "default",
+      "max_concurrent_requests": 1,
+      "enabled": false
+    }
+  ],
+  "audio_backends": [
+    {
+      "id": "audio-main",
+      "type": "openai_compatible",
+      "url": "http://127.0.0.1:8080/v1",
+      "host": "default",
+      "max_concurrent_requests": 1,
+      "enabled": false
+    }
+  ],
+  "ollama_defaults": {
+    "keep_alive": "10m",
+    "think": false,
+    "options": {
+      "num_thread": 8,
+      "num_ctx": 8192,
+      "temperature": 0.2,
+      "top_p": 0.9
+    }
+  },
+  "models": {
+    "expose_native_ollama_models": true,
+    "aliases": [
+      {
+        "name": "qwen-instruct",
+        "primary_model": "qwen:30b",
+        "backup_models": ["qwen:14b", "qwen:72b"],
+        "overrides": {
+          "think": false,
+          "options": {
+            "temperature": 0.2
+          }
+        }
+      },
+      {
+        "name": "qwen-thinking",
+        "primary_model": "qwen:30b",
+        "backup_models": ["qwen:14b", "qwen:72b"],
+        "overrides": {
+          "think": true,
+          "options": {
+            "temperature": 0.2
+          }
+        }
+      }
+    ]
+  },
+  "policy": {
+    "ignore_unsupported_fields": true,
+    "log_unsupported_fields": true,
+    "allow_client_override_options": false,
+    "allow_anthropic_thinking_override": false
+  },
+  "documents": {
+    "enabled": true,
+    "default_mode": "auto",
+    "ocr_enabled": true,
+    "ocr_mode": "auto",
+    "allow_url_input": false,
+    "allow_base64_input": true,
+    "preparation_workers": 1
+  },
+  "scheduler": {
+    "strategy": "priority_host_model_affinity",
+    "top_n_lookahead": 64,
+    "queue_max_pending": 100,
+    "aging_per_second": 0.05,
+    "unknown_tokens_per_second": 5.0,
+    "unknown_cold_load_penalty_seconds": 30.0,
+    "alias_substitution_penalty_seconds": 8.0,
+    "disruption_factor": 0.25,
+    "retry": {
+      "max_attempts": 2,
+      "streaming_retry_before_first_token": true,
+      "streaming_retry_after_first_token": false
+    }
+  }
+}

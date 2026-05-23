@@ -146,6 +146,7 @@ func TestEnsureDirs_CreatesDirectories(t *testing.T) {
 		name string
 		path string
 	}{
+		{"Config", filepath.Dir(p.ConfigFile)},
 		{"Tmp", p.Tmp},
 		{"Cache", p.Cache},
 		{"Uploads", p.Uploads},

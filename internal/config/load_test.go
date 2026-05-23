@@ -281,7 +281,9 @@ func TestLoadConfig_Partial(t *testing.T) {
 }
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	cfg, err := LoadConfig("testdata/nonexistent_file.json")
+	// Use a temp directory so the auto-generated default config is cleaned up.
+	path := t.TempDir() + "/nonexistent.json"
+	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("expected nil error for missing file, got: %v", err)
 	}

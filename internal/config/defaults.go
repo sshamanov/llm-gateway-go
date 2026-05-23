@@ -1,5 +1,12 @@
 package config
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
 // DefaultConfig returns a fully populated Config with all default values
 // as specified in the architecture document section 5.1 example config.
 func DefaultConfig() Config {
@@ -105,4 +112,23 @@ func DefaultConfig() Config {
 // ptr returns a pointer to a copy of v.
 func ptr[T any](v T) *T {
 	return &v
+}
+
+// SaveConfig marshals cfg as indented JSON and writes it to path.
+// The parent directory is created if it does not exist.
+func SaveConfig(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling config: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	return nil
 }

@@ -13,7 +13,8 @@ var errEmptyConfig = errors.New("config file is empty")
 // LoadConfig reads a JSON config file at path and returns a Config.
 //
 // It starts from DefaultConfig() and then overlays values from the JSON file.
-// If the file does not exist (os.IsNotExist), the defaults are returned with no error.
+// If the file does not exist (os.IsNotExist), a default config file is written
+// and the defaults are returned.
 // On parse failure a zero Config and the parse error are returned so callers
 // can distinguish "no config" from "broken config".
 func LoadConfig(path string) (Config, error) {
@@ -22,6 +23,9 @@ func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if saveErr := SaveConfig(path, cfg); saveErr != nil {
+				return Config{}, fmt.Errorf("saving default config: %w", saveErr)
+			}
 			return cfg, nil
 		}
 		return Config{}, fmt.Errorf("reading config: %w", err)
