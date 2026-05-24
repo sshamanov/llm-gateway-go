@@ -142,6 +142,9 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 		}
 
 		// Step 9: Create and submit job to scheduler.
+		jobCtx, cancelJob := context.WithCancel(r.Context())
+		defer cancelJob()
+
 		job := &scheduler.Job{
 			ID:             jobID,
 			Kind:           scheduler.KindChat,
@@ -152,6 +155,7 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			Messages:       messages,
 			Options:        ollamaReq.Options,
 			ResultChan:     make(chan scheduler.JobResult, 1),
+			JobCtx:         jobCtx,
 		}
 
 		if err := sched.Submit(job); err != nil {
@@ -159,8 +163,16 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			return
 		}
 
-		// Step 10: Wait for result.
-		result := <-job.ResultChan
+		// Step 10: Wait for result or client disconnect.
+		var result scheduler.JobResult
+		select {
+		case result = <-job.ResultChan:
+		case <-r.Context().Done():
+			logger.Warn("chat client disconnected",
+				logging.String("model", chatReq.Model),
+			)
+			return
+		}
 		if result.Err != nil {
 			logger.Error("chat job failed",
 				logging.String("model", chatReq.Model),

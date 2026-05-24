@@ -146,12 +146,16 @@
       const data = await fetchJSON('/debug/models');
       if (!data) { el.innerHTML = '<p>No data</p>'; return; }
       let html = '';
-      if (data.aliases) {
-        html += '<h3>Aliases</h3><ul>';
+      if (data.aliases && data.aliases.length > 0) {
+        html += '<h3>Aliases</h3><table><thead><tr><th>Name</th><th>Primary</th><th>Backups</th></tr></thead><tbody>';
         for (const a of data.aliases) {
-          html += `<li>${a}</li>`;
+          html += `<tr>
+            <td>${a.name || '-'}</td>
+            <td>${a.primary_model || '-'}</td>
+            <td>${(a.backup_models || []).join(', ') || '-'}</td>
+          </tr>`;
         }
-        html += '</ul>';
+        html += '</tbody></table>';
       }
       if (data.native_models) {
         html += '<h3>Native</h3><p>' + data.native_models.join(', ') + '</p>';

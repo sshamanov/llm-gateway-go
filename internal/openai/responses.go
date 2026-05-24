@@ -362,6 +362,9 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 		}
 
 		// Step 10: Create and submit job to scheduler.
+		jobCtx, cancelJob := context.WithCancel(r.Context())
+		defer cancelJob()
+
 		job := &scheduler.Job{
 			ID:             jobID,
 			Kind:           scheduler.KindChat,
@@ -372,6 +375,7 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			Messages:       messages,
 			Options:        options,
 			ResultChan:     make(chan scheduler.JobResult, 1),
+			JobCtx:         jobCtx,
 		}
 
 		if err := sched.Submit(job); err != nil {
@@ -379,8 +383,13 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			return
 		}
 
-		// Step 11: Wait for result.
-		result := <-job.ResultChan
+		// Step 11: Wait for result or client disconnect.
+		var result scheduler.JobResult
+		select {
+		case result = <-job.ResultChan:
+		case <-r.Context().Done():
+			return
+		}
 		if result.Err != nil {
 			logger.Error("responses job failed",
 				logging.String("model", req.Model),

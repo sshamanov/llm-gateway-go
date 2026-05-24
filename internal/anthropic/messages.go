@@ -298,6 +298,9 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 		}
 
 		// Step 11: Create and submit job to scheduler.
+		jobCtx, cancelJob := context.WithCancel(r.Context())
+		defer cancelJob()
+
 		job := &scheduler.Job{
 			ID:             jobID,
 			Kind:           scheduler.KindChat,
@@ -310,6 +313,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			Options:        options,
 			Think:          think,
 			ResultChan:     make(chan scheduler.JobResult, 1),
+			JobCtx:         jobCtx,
 		}
 
 		if err := sched.Submit(job); err != nil {
@@ -317,8 +321,13 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			return
 		}
 
-		// Step 12: Wait for result.
-		result := <-job.ResultChan
+		// Step 12: Wait for result or client disconnect.
+		var result scheduler.JobResult
+		select {
+		case result = <-job.ResultChan:
+		case <-r.Context().Done():
+			return
+		}
 		if result.Err != nil {
 			logger.Error("anthropic messages job failed",
 				logging.String("model", req.Model),

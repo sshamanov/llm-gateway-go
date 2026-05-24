@@ -290,8 +290,13 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 			Think:    nil,
 		}
 
+		ctx := job.JobCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
 		startTime := time.Now()
-		chatResp, err := ollama.SendChat(s.Client, currentBaseURL, &chatReq)
+		chatResp, err := ollama.SendChat(ctx, s.Client, currentBaseURL, &chatReq)
 		duration := time.Since(startTime)
 
 		if err != nil {
@@ -299,6 +304,16 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 				BackendID: currentBackendID,
 				ModelName: currentModel,
 			})
+			// If the client cancelled, skip retries and fail fast.
+			if job.JobCtx != nil {
+				select {
+				case <-job.JobCtx.Done():
+					job.State = StateFailed
+					job.ResultChan <- JobResult{Err: job.JobCtx.Err()}
+					return
+				default:
+				}
+			}
 			if s.Logger != nil {
 				s.Logger.Warn("non-streaming request failed, will retry",
 					logging.String("job_id", job.ID),

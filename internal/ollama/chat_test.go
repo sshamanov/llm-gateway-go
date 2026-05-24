@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -68,7 +69,7 @@ func TestSendChat_Success(t *testing.T) {
 		Stream: false,
 	}
 
-	result, err := SendChat(client, server.URL, req)
+	result, err := SendChat(context.Background(), client, server.URL, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestSendChat_HTTPError(t *testing.T) {
 	defer server.Close()
 
 	client := server.Client()
-	_, err := SendChat(client, server.URL, &ChatRequest{Model: "test"})
+	_, err := SendChat(context.Background(), client, server.URL, &ChatRequest{Model: "test"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -131,7 +132,7 @@ func TestSendChat_InvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	client := server.Client()
-	_, err := SendChat(client, server.URL, &ChatRequest{Model: "test"})
+	_, err := SendChat(context.Background(), client, server.URL, &ChatRequest{Model: "test"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -161,7 +162,7 @@ func TestSendChat_TrailingSlash(t *testing.T) {
 	defer server.Close()
 
 	client := server.Client()
-	result, err := SendChat(client, server.URL+"/", &ChatRequest{Model: "test-model"})
+	result, err := SendChat(context.Background(), client, server.URL+"/", &ChatRequest{Model: "test-model"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

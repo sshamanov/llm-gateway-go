@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,9 @@ import (
 )
 
 // SendChat sends a chat request to an Ollama backend and returns the response.
-// It POSTs to {baseURL}/api/chat.
-func SendChat(client *http.Client, baseURL string, req *ChatRequest) (*ChatResponse, error) {
+// It POSTs to {baseURL}/api/chat. The context controls the lifetime of the
+// HTTP request.
+func SendChat(ctx context.Context, client *http.Client, baseURL string, req *ChatRequest) (*ChatResponse, error) {
 	url := strings.TrimRight(baseURL, "/") + "/api/chat"
 
 	body, err := json.Marshal(req)
@@ -19,7 +21,7 @@ func SendChat(client *http.Client, baseURL string, req *ChatRequest) (*ChatRespo
 		return nil, fmt.Errorf("send chat: encode request: %w", err)
 	}
 
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("send chat: %w", err)
 	}
