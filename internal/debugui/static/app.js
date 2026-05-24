@@ -121,20 +121,6 @@
       document.getElementById('health').className = `badge ${badgeClass(s.queue_pending > 10 ? 'degraded' : 'healthy')}`;
 
       let html = `<p>Queue: ${s.queue_total} total / ${s.queue_pending} pending</p>`;
-      html += `<p>Stats entries: ${s.stats_count || 0}</p>`;
-      if (s.stats) {
-        html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>TTFT (s)</th><th>Cold Load (s)</th></tr></thead><tbody>';
-        for (const [key, v] of Object.entries(s.stats)) {
-          html += `<tr>
-            <td>${key}</td>
-            <td>${v.samples || 0}</td>
-            <td>${(v.tps || 0).toFixed(1)}</td>
-            <td>${(v.ttft_seconds || 0).toFixed(2)}</td>
-            <td>${(v.cold_load_seconds || 0).toFixed(2)}</td>
-          </tr>`;
-        }
-        html += '</tbody></table>';
-      }
       el.innerHTML = html;
     } catch (err) { el.classList.add('stale'); }
   }
@@ -164,26 +150,41 @@
     } catch (err) { el.classList.add('stale'); }
   }
 
-  // ---- Stats Panel (uses scheduler data) ----
+  // ---- Learned Stats Panel ----
   async function updateStats() {
-    // Stats are shown in scheduler panel; this panel shows config summary.
     const el = document.getElementById('stats-content');
     try {
-      const data = await fetchJSON('/debug/config');
-      if (!data || !data.config) { el.innerHTML = '<p>No config</p>'; return; }
-      const c = data.config;
-      let html = '<table>';
-      if (c.server) {
-        html += `<tr><td>Request Timeout</td><td>${c.server.request_timeout_seconds}s</td></tr>`;
-        html += `<tr><td>Debug Logging</td><td>${c.server.enable_debug_logging}</td></tr>`;
+      const data = await fetchJSON('/debug/scheduler');
+      if (!data || !data.scheduler) { el.innerHTML = '<p>No data</p>'; return; }
+      const s = data.scheduler;
+      if (!s.stats || Object.keys(s.stats).length === 0) {
+        el.innerHTML = '<p>No learned stats yet — send requests to populate.</p>';
+        return;
       }
-      if (c.scheduler) {
-        html += `<tr><td>Scheduler Strategy</td><td>${c.scheduler.strategy}</td></tr>`;
-        html += `<tr><td>Queue Max</td><td>${c.scheduler.queue_max_pending}</td></tr>`;
-        html += `<tr><td>Aging/s</td><td>${c.scheduler.aging_per_second}</td></tr>`;
-        html += `<tr><td>Retry Max</td><td>${c.scheduler.retry.max_attempts}</td></tr>`;
+
+      const formatTime = (t) => {
+        if (!t) return '-';
+        const d = new Date(t);
+        return d.toLocaleTimeString();
+      };
+
+      let html = `<p>Tracked backend+model pairs: ${s.stats_count || 0}</p>`;
+      html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>Cold Load</th><th>Failures</th><th>Last OK</th></tr></thead><tbody>';
+      for (const [key, v] of Object.entries(s.stats)) {
+        const tps = (v.avg_tokens_per_second || 0).toFixed(1);
+        const cold = (v.avg_cold_load_time || 0).toFixed(2) + 's';
+        const fails = v.consecutive_failures || 0;
+        const failClass = fails > 0 ? ' style="color:#e74c3c;font-weight:bold"' : '';
+        html += `<tr>
+          <td>${key}</td>
+          <td>${v.samples || 0}</td>
+          <td>${tps}</td>
+          <td>${cold}</td>
+          <td${failClass}>${fails}</td>
+          <td>${formatTime(v.last_success)}</td>
+        </tr>`;
       }
-      html += '</table>';
+      html += '</tbody></table>';
       el.innerHTML = html;
     } catch (err) { el.classList.add('stale'); }
   }
