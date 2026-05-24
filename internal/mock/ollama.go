@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"time"
 
 	"llm-go-proxy/internal/ollama"
@@ -18,17 +19,35 @@ type FakeOllamaConfig struct {
 	LoadedModels        []string
 	ChatLatency         time.Duration
 	StreamChunkLatency  time.Duration
-	FailureRate         float64
+	FailureRate         float64        // Random failure probability (0..1) per request
+	FailCount           int            // Deterministic: fail first N requests, then succeed
 	FirstChunkGarbage   bool
 	MidStreamFailAfter  int
 	ChatResponseContent string
+	LoadDuration        int64          // Fake model load time in nanoseconds
+	TotalDuration       int64          // Fake total inference time in nanoseconds
+	EvalCount           int            // Fake eval token count for TPS calculation
+}
+
+// requestCount tracks per-backend request counts for deterministic failure.
+type requestCount struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (rc *requestCount) inc() int {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.count++
+	return rc.count
 }
 
 // FakeOllama wraps httptest.Server as a fully independent fake Ollama node.
 type FakeOllama struct {
-	Server *httptest.Server
-	URL    string
-	ID     string
+	Server    *httptest.Server
+	URL       string
+	ID        string
+	reqCount  *requestCount
 }
 
 // NewFakeOllama creates and starts a fake Ollama backend.
@@ -49,17 +68,19 @@ func NewFakeOllama(cfg FakeOllamaConfig) *FakeOllama {
 		cfg.StreamChunkLatency = 5 * time.Millisecond
 	}
 
-	handler := fakeOllamaHandler(cfg)
+	rc := &requestCount{}
+	handler := fakeOllamaHandler(cfg, rc)
 	server := httptest.NewServer(handler)
 
 	return &FakeOllama{
-		Server: server,
-		URL:    server.URL,
-		ID:     cfg.ID,
+		Server:   server,
+		URL:      server.URL,
+		ID:       cfg.ID,
+		reqCount: rc,
 	}
 }
 
-func fakeOllamaHandler(cfg FakeOllamaConfig) http.Handler {
+func fakeOllamaHandler(cfg FakeOllamaConfig, rc *requestCount) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +107,11 @@ func fakeOllamaHandler(cfg FakeOllamaConfig) http.Handler {
 			return
 		}
 
+		if cfg.FailCount > 0 && rc.inc() <= cfg.FailCount {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
 		var chatReq ollama.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -107,6 +133,15 @@ func handleNonStreamingChat(w http.ResponseWriter, cfg FakeOllamaConfig, model s
 		time.Sleep(cfg.ChatLatency)
 	}
 
+	totalDur := cfg.TotalDuration
+	if totalDur == 0 {
+		totalDur = int64(100 * time.Millisecond)
+	}
+	evalCount := cfg.EvalCount
+	if evalCount == 0 {
+		evalCount = 5
+	}
+
 	resp := ollama.ChatResponse{
 		Model:     model,
 		CreatedAt: time.Now(),
@@ -115,10 +150,10 @@ func handleNonStreamingChat(w http.ResponseWriter, cfg FakeOllamaConfig, model s
 			Content: cfg.ChatResponseContent,
 		},
 		Done:             true,
-		TotalDuration:    int64(100 * time.Millisecond),
-		LoadDuration:     0,
+		TotalDuration:    totalDur,
+		LoadDuration:     cfg.LoadDuration,
 		PromptEvalCount:  10,
-		EvalCount:        5,
+		EvalCount:        evalCount,
 		DoneReason:       "stop",
 	}
 
@@ -143,6 +178,15 @@ func handleStreamingChat(w http.ResponseWriter, cfg FakeOllamaConfig, model stri
 		return
 	}
 
+	totalDur := cfg.TotalDuration
+	if totalDur == 0 {
+		totalDur = int64(200 * time.Millisecond)
+	}
+	evalCount := cfg.EvalCount
+	if evalCount == 0 {
+		evalCount = 5
+	}
+
 	// Send content chunks.
 	words := []string{"Hello", " from", " Fake", "Ollama"}
 	chunksSent := 0
@@ -165,8 +209,9 @@ func handleStreamingChat(w http.ResponseWriter, cfg FakeOllamaConfig, model stri
 			Done: done,
 		}
 		if done {
-			chunk.TotalDuration = int64(200 * time.Millisecond)
-			chunk.EvalCount = 5
+			chunk.TotalDuration = totalDur
+			chunk.LoadDuration = cfg.LoadDuration
+			chunk.EvalCount = evalCount
 			chunk.DoneReason = "stop"
 		}
 

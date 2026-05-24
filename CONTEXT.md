@@ -495,6 +495,7 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 - 2026-05-22: Mock E2E testing system (M11) implemented — 14 scenarios across 7 categories, all passing. FakeOllama wraps httptest.Server, harness mirrors main.go component setup, proxy runs in-process. Fixed bug in debug_scheduler.go (struct-keyed map → string-keyed for JSON). Pushed to origin.
 - 2026-05-24: Added config.example.json reference file with all config options at repo root. Added SaveConfig() to config package. LoadConfig now auto-writes default config.json when file is missing. EnsureDirs creates config/ subdirectory. First run with empty storage dir works out of box.
 - 2026-05-24: Fixed debug UI "No backends" — handler returned `data` key but JS checked `backends`. Hosts now auto-populate from backend `host` fields with max_active_jobs=1; NewHostLeaseManager accepts variadic backend host IDs. Minimal config no longer needs explicit hosts section.
+- 2026-05-24: Enhanced FakeOllama with deterministic failures (FailCount via per-backend request counter), realistic metrics (LoadDuration, TotalDuration, EvalCount). Added 5 new mock scenarios: NonStreamingRetrySuccess, RetryExhausted, MultiBackendChaos, ColdModelPreference, ClientCancellation. All 19 scenarios pass.
 
 ---
 

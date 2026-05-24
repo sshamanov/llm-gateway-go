@@ -70,6 +70,8 @@ func main() {
 	reg.Register("StreamingChat", "chat", scenarios.StreamingChat)
 	reg.Register("StreamingRetryBeforeToken", "retry", scenarios.StreamingRetryBeforeToken)
 	reg.Register("NoRetryAfterToken", "retry", scenarios.NoRetryAfterToken)
+	reg.Register("NonStreamingRetrySuccess", "retry", scenarios.NonStreamingRetrySuccess)
+	reg.Register("RetryExhausted", "retry", scenarios.RetryExhausted)
 	reg.Register("HostCapacitySerialization", "capacity", scenarios.HostCapacitySerialization)
 	reg.Register("QueueAging", "capacity", scenarios.QueueAging)
 	reg.Register("BackendDisable", "capacity", scenarios.BackendDisable)
@@ -80,6 +82,9 @@ func main() {
 	reg.Register("MetricsEndpoint", "observe", scenarios.MetricsEndpoint)
 	reg.Register("DebugEndpoints", "observe", scenarios.DebugEndpoints)
 	reg.Register("DocumentProcessing", "document", scenarios.DocumentProcessing)
+	reg.Register("MultiBackendChaos", "chaos", scenarios.MultiBackendChaos)
+	reg.Register("ColdModelPreference", "chaos", scenarios.ColdModelPreference)
+	reg.Register("ClientCancellation", "chaos", scenarios.ClientCancellation)
 
 	fmt.Println("=== Mock E2E Tests ===")
 	fmt.Printf("Proxy: %s\n\n", h.ProxyURL)

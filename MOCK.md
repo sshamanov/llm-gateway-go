@@ -86,9 +86,13 @@ func NewFakeOllama(cfg FakeOllamaConfig) *FakeOllama
 | `ChatLatency` | `time.Duration` | `0` | Artificial delay per chat response |
 | `StreamChunkLatency` | `time.Duration` | `5ms` | Delay between streaming chunks |
 | `FailureRate` | `float64` | `0.0` | Probability (0..1) of returning 500 |
+| `FailCount` | `int` | `0` | Deterministic: fail first N requests, then succeed (per-backend request counter) |
 | `FirstChunkGarbage` | `bool` | `false` | First streaming line is invalid JSON (triggers decode-error retry) |
 | `MidStreamFailAfter` | `int` | `0` | Send N good chunks then garbage (0 = disabled) |
 | `ChatResponseContent` | `string` | `"Hello from FakeOllama"` | Content in chat response |
+| `LoadDuration` | `int64` | `0` | Fake model load time in nanoseconds (used for cold-load scoring) |
+| `TotalDuration` | `int64` | `100ms` | Fake total inference time in nanoseconds (used for TPS scoring) |
+| `EvalCount` | `int` | `5` | Fake eval token count (used for TPS calculation) |
 
 **Endpoints served**:
 
@@ -202,47 +206,57 @@ func (h *Harness) AssertHostCapacity(hostID string, wantActive, wantCapacity int
 | 1 | `HealthyCluster` | 2 backends, 2 models. Non-streaming chat. Verify response shape (id, choices, model). |
 | 2 | `StreamingChat` | Streaming request, verify SSE chunks arrive with `data:` prefix, verify `[DONE]` sentinel. |
 
-### 3.2 `retry.go` — Streaming retry
+### 3.2 `retry.go` — Streaming and non-streaming retry
 
 | # | Scenario | Description |
 |---|----------|-------------|
 | 3 | `StreamingRetryBeforeToken` | Backend 1 configured with `FirstChunkGarbage=true`. Backend 2 healthy. Verify request succeeds on backend 2. |
 | 4 | `NoRetryAfterToken` | Backend 1 configured with `MidStreamFailAfter=1`. Verify job fails (no retry after first token reached client). |
+| 5 | `NonStreamingRetrySuccess` | Backend 1 configured with `FailCount=1` (first request fails). Backend 2 healthy. Verify non-streaming request retries on b2 and succeeds. |
+| 6 | `RetryExhausted` | Both backends configured with `FailureRate=1.0`. Verify non-streaming request fails with 502 after all retry attempts exhausted. |
 
 ### 3.3 `capacity.go` — Capacity and queuing
 
 | # | Scenario | Description |
 |---|----------|-------------|
-| 5 | `HostCapacitySerialization` | Host max=1. Submit 3 non-streaming jobs simultaneously. Verify all 3 complete (2 queued, 1 runs at a time). |
-| 6 | `QueueAging` | Submit low-priority document job, wait, submit high-priority chat job. Verify chat dequeues first despite submitting later. |
-| 7 | `BackendDisable` | Backend fails N consecutive times. Verify backend-model removed from valid assignments. |
-| 8 | `QueueFull` | Fill queue to QueueMaxPending. Verify 503 is returned. |
+| 7 | `HostCapacitySerialization` | Host max=1. Submit 3 non-streaming jobs simultaneously. Verify all 3 complete (2 queued, 1 runs at a time). |
+| 8 | `QueueAging` | Submit low-priority document job, wait, submit high-priority chat job. Verify chat dequeues first despite submitting later. |
+| 9 | `BackendDisable` | Backend fails N consecutive times. Verify backend-model removed from valid assignments. |
+| 10 | `QueueFull` | Fill queue to QueueMaxPending. Verify 503 is returned. |
 
 ### 3.4 `alias.go` — Alias fallback
 
 | # | Scenario | Description |
 |---|----------|-------------|
-| 9 | `AliasFallback` | Primary model not loaded (not in `/api/ps`), backup model loaded. Request via alias. Verify backup is used (response model matches backup). |
+| 11 | `AliasFallback` | Primary model not loaded (not in `/api/ps`), backup model loaded. Request via alias. Verify backup is used. |
 
 ### 3.5 `api.go` — Full API surface
 
 | # | Scenario | Description |
 |---|----------|-------------|
-| 10 | `FullAPISurface` | One request each: /v1/chat/completions, /v1/responses, /v1/messages, /v1/messages/count_tokens, /v1/models. Verify each returns correct response shape. |
-| 11 | `ImageGeneration` | With fake image backend. Verify response has `created` and `data` fields. |
+| 12 | `FullAPISurface` | One request each: /v1/chat/completions, /v1/responses, /v1/messages, /v1/messages/count_tokens, /v1/models. Verify each returns correct response shape. |
+| 13 | `ImageGeneration` | With fake image backend. Verify response has `created` and `data` fields. |
 
 ### 3.6 `observe.go` — Observability
 
 | # | Scenario | Description |
 |---|----------|-------------|
-| 12 | `MetricsEndpoint` | After running chat requests, GET /metrics. Verify `proxy_uptime_seconds`, `proxy_queue_depth`, `proxy_backend_up`, `proxy_host_active_jobs` exist with correct values. |
-| 13 | `DebugEndpoints` | GET /debug/queue, /debug/scheduler, /debug/hosts, /debug/config. Verify JSON shape (required fields, non-null). |
+| 14 | `MetricsEndpoint` | After running chat requests, GET /metrics. Verify key metrics exist. |
+| 15 | `DebugEndpoints` | GET /debug/queue, /debug/scheduler, /debug/hosts, /debug/config. Verify JSON shape. |
 
-### 3.7 `document.go` — Document processing
+### 3.7 `chaos.go` — Chaos and failure modes
 
 | # | Scenario | Description |
 |---|----------|-------------|
-| 14 | `DocumentProcessing` | Upload a minimal valid PDF via multipart form. Verify 200 or 422 (no extractable text). Verify response has `id`, `model`, `content` fields. |
+| 16 | `MultiBackendChaos` | 3 backends with mixed failure modes (random 30%, deterministic FailCount, clean), varying latencies. Send 10 concurrent non-streaming requests. All complete via retries. |
+| 17 | `ColdModelPreference` | Two backends: one cold (high LoadDuration/TotalDuration, low TPS), one warm (fast). Send 5 requests — all complete, scheduler learns warm preference. |
+| 18 | `ClientCancellation` | Backend with 5s ChatLatency. Client cancels after 100ms. Verify request does not return 200 (context cancellation propagates). |
+
+### 3.8 `document.go` — Document processing
+
+| # | Scenario | Description |
+|---|----------|-------------|
+| 19 | `DocumentProcessing` | Upload a minimal valid PDF via multipart form. Verify 200 or 422 (no extractable text). Verify response has `id`, `model`, `content` fields. |
 
 ---
 
@@ -256,11 +270,12 @@ internal/mock/
   scenarios.go        Scenario type, registry, runner
   scenarios/
     chat.go           HealthyCluster, StreamingChat
-    retry.go          StreamingRetryBeforeToken, NoRetryAfterToken
+    retry.go          StreamingRetryBeforeToken, NoRetryAfterToken, NonStreamingRetrySuccess, RetryExhausted
     capacity.go       HostCapacitySerialization, QueueAging, BackendDisable, QueueFull
     alias.go          AliasFallback
     api.go            FullAPISurface, ImageGeneration
     observe.go        MetricsEndpoint, DebugEndpoints
+    chaos.go          MultiBackendChaos, ColdModelPreference, ClientCancellation
     document.go       DocumentProcessing
 
 cmd/mocktest/
