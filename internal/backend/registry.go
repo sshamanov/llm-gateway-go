@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -136,6 +137,7 @@ func (r *Registry) BackendSnapshots() []BackendSnapshot {
 	for _, backend := range r.backends {
 		snapshots = append(snapshots, backend.Snapshot())
 	}
+	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].ID < snapshots[j].ID })
 	return snapshots
 }
 

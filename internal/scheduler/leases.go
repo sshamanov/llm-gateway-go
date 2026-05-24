@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"sort"
 	"sync"
 
 	"llm-go-proxy/internal/config"
@@ -164,6 +165,7 @@ func (h *HostLeaseManager) States() []HostState {
 			Capacity:   int(max),
 		})
 	}
+	sort.Slice(states, func(i, j int) bool { return states[i].HostID < states[j].HostID })
 	return states
 }
 
@@ -186,5 +188,6 @@ func (b *BackendLeaseManager) States() []BackendLeaseState {
 			Capacity:   int(max),
 		})
 	}
+	sort.Slice(states, func(i, j int) bool { return states[i].BackendID < states[j].BackendID })
 	return states
 }
