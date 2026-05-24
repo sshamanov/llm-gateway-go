@@ -207,47 +207,127 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 		return
 	}
 
-	chatReq := ollama.ChatRequest{
-		Model:    assignment.ModelName,
-		Messages: job.Messages,
-		Stream:   false,
-		Options:  job.Options,
-		Think:    nil, // use default
+	s.runNonStreamingAssignment(&assignment, baseURL)
+}
+
+// runNonStreamingAssignment executes a non-streaming job assignment with retry.
+// On failure it finds alternative backends (excluding previously-failed ones),
+// up to maxAttempts. Leases are released and re-acquired for each attempt.
+func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
+	job := a.Job
+	currentBackendID := a.BackendID
+	currentHost := a.Host
+	currentModel := a.ModelName
+	currentBaseURL := baseURL
+
+	failedBackends := make(map[string]bool)
+
+	// Ensure the outer defer in runAssignment releases the correct (last-used)
+	// leases on return.
+	defer func() {
+		s.Scorer.Hosts.ReleaseHost(currentHost)
+		s.Scorer.Backends.ReleaseBackend(currentBackendID)
+	}()
+
+	maxAttempts := s.Scorer.Config.Retry.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 1
 	}
 
-	startTime := time.Now()
-	chatResp, err := ollama.SendChat(s.Client, baseURL, &chatReq)
-	duration := time.Since(startTime)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Release current (failed) leases.
+			s.Scorer.Hosts.ReleaseHost(currentHost)
+			s.Scorer.Backends.ReleaseBackend(currentBackendID)
 
-	if err != nil {
-		if s.Logger != nil {
-			s.Logger.Error("assignment failed",
-				logging.String("job_id", job.ID),
-				logging.String("backend_id", assignment.BackendID),
-				logging.String("model", assignment.ModelName),
-				logging.String("error", err.Error()),
-				logging.Duration("duration", duration),
-			)
+			alt := s.findAlternativeBackend(job, failedBackends)
+			if alt == nil {
+				err := fmt.Errorf("scheduler: no alternative backend after %d attempts", attempt)
+				if s.Logger != nil {
+					s.Logger.Error("non-streaming retry exhausted",
+						logging.String("job_id", job.ID),
+						logging.Int("attempts", attempt),
+					)
+				}
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+
+			if !s.Scorer.Hosts.AcquireHost(alt.Host) {
+				err := fmt.Errorf("scheduler: host at capacity for retry")
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+			if !s.Scorer.Backends.AcquireBackend(alt.BackendID) {
+				s.Scorer.Hosts.ReleaseHost(alt.Host)
+				err := fmt.Errorf("scheduler: backend at capacity for retry")
+				job.State = StateFailed
+				job.ResultChan <- JobResult{Err: err}
+				return
+			}
+
+			currentBackendID = alt.BackendID
+			currentHost = alt.Host
+			currentModel = alt.ModelName
+			currentBaseURL = s.BackendURLs[alt.BackendID]
+
+			// Update outer assignment so the defer in runAssignment uses correct leases.
+			a.Host = alt.Host
+			a.BackendID = alt.BackendID
+			job.BackendID = alt.BackendID
+			job.ConcreteModel = alt.ModelName
 		}
-		s.Stats.RecordFailure(BackendModelKey{
-			BackendID: assignment.BackendID,
-			ModelName: assignment.ModelName,
-		})
-		job.State = StateFailed
-		job.ResultChan <- JobResult{Err: err}
+
+		failedBackends[currentBackendID] = true
+
+		chatReq := ollama.ChatRequest{
+			Model:    currentModel,
+			Messages: job.Messages,
+			Stream:   false,
+			Options:  job.Options,
+			Think:    nil,
+		}
+
+		startTime := time.Now()
+		chatResp, err := ollama.SendChat(s.Client, currentBaseURL, &chatReq)
+		duration := time.Since(startTime)
+
+		if err != nil {
+			s.Stats.RecordFailure(BackendModelKey{
+				BackendID: currentBackendID,
+				ModelName: currentModel,
+			})
+			if s.Logger != nil {
+				s.Logger.Warn("non-streaming request failed, will retry",
+					logging.String("job_id", job.ID),
+					logging.String("backend_id", currentBackendID),
+					logging.String("model", currentModel),
+					logging.String("error", err.Error()),
+					logging.Duration("duration", duration),
+					logging.Int("attempt", attempt+1),
+				)
+			}
+			continue
+		}
+
+		tps := computeTPS(chatResp)
+		coldLoad := computeColdLoad(chatResp)
+
+		s.Stats.RecordSuccess(BackendModelKey{
+			BackendID: currentBackendID,
+			ModelName: currentModel,
+		}, tps, coldLoad)
+
+		job.State = StateCompleted
+		job.ResultChan <- JobResult{Response: chatResp}
 		return
 	}
 
-	tps := computeTPS(chatResp)
-	coldLoad := computeColdLoad(chatResp)
-
-	s.Stats.RecordSuccess(BackendModelKey{
-		BackendID: assignment.BackendID,
-		ModelName: assignment.ModelName,
-	}, tps, coldLoad)
-
-	job.State = StateCompleted
-	job.ResultChan <- JobResult{Response: chatResp}
+	err := fmt.Errorf("scheduler: non-streaming job failed after %d attempts", maxAttempts)
+	job.State = StateFailed
+	job.ResultChan <- JobResult{Err: err}
 }
 
 // runStreamingAssignment executes a streaming job assignment against an Ollama
@@ -291,7 +371,7 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 			s.Scorer.Backends.ReleaseBackend(currentBackendID)
 
 			// Find an alternative backend, excluding previously-failed ones.
-			alt := s.findStreamingBackend(job, failedBackends)
+			alt := s.findAlternativeBackend(job, failedBackends)
 			if alt == nil {
 				err := fmt.Errorf("scheduler: no alternative backend after %d attempts", attempt)
 				if s.Logger != nil {
@@ -450,10 +530,10 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 	job.ResultChan <- JobResult{Err: err}
 }
 
-// findStreamingBackend finds the best backend for a streaming retry, excluding
+// findAlternativeBackend finds the best backend for a streaming retry, excluding
 // previously-failed backends. It temporarily sets the job state to Pending
 // because ValidAssignments only considers pending jobs.
-func (s *Scheduler) findStreamingBackend(job *Job, excludeBackends map[string]bool) *Assignment {
+func (s *Scheduler) findAlternativeBackend(job *Job, excludeBackends map[string]bool) *Assignment {
 	// ValidAssignments only considers StatePending jobs. Streaming retries have
 	// StateRunning, so temporarily set Pending for the lookup.
 	originalState := job.State
