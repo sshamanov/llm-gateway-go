@@ -103,6 +103,18 @@ func (st *StatsTracker) GetColdLoadTime(key BackendModelKey, fallback float64) f
 	return s.AvgColdLoadTime
 }
 
+// GetSamples returns the number of recorded samples for a key.
+func (st *StatsTracker) GetSamples(key BackendModelKey) int64 {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+
+	s, ok := st.stats[key]
+	if !ok {
+		return 0
+	}
+	return s.Samples
+}
+
 // GetConsecutiveFailures returns the consecutive failure count for a key.
 func (st *StatsTracker) GetConsecutiveFailures(key BackendModelKey) int {
 	st.mu.RLock()

@@ -493,6 +493,7 @@ func handleStreamAnthropic(
 		ID:             jobID,
 		Kind:           scheduler.KindChat,
 		Priority:       scheduler.KindChat.Priority(),
+			CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
 		Candidates:     candidates,

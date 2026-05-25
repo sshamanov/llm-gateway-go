@@ -54,6 +54,7 @@ const (
 	StateRunning
 	StateCompleted
 	StateFailed
+	StateAborted
 )
 
 // String returns a human-readable name for the job state.
@@ -67,6 +68,8 @@ func (s JobState) String() string {
 		return "completed"
 	case StateFailed:
 		return "failed"
+	case StateAborted:
+		return "aborted"
 	default:
 		return "unknown"
 	}

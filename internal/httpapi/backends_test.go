@@ -17,7 +17,7 @@ func TestDebugBackendsHandler_NilRegistry(t *testing.T) {
 	logger := logging.NewLogger(logging.LevelDebug, "test")
 	logger.SetOutput(io.Discard, io.Discard)
 
-	handler := httpapi.DebugBackendsHandler(logger, nil)
+	handler := httpapi.DebugBackendsHandler(logger, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/backends", nil)
 	rec := httptest.NewRecorder()
@@ -53,7 +53,7 @@ func TestDebugBackendsHandler_ReturnsBackends(t *testing.T) {
 	logger.SetOutput(io.Discard, io.Discard)
 
 	reg := backend.NewRegistry(cfg, logger)
-	handler := httpapi.DebugBackendsHandler(logger, reg)
+	handler := httpapi.DebugBackendsHandler(logger, reg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/backends", nil)
 	rec := httptest.NewRecorder()
@@ -81,7 +81,7 @@ func TestDebugBackendsHandler_ContentType(t *testing.T) {
 	logger := logging.NewLogger(logging.LevelDebug, "test")
 	logger.SetOutput(io.Discard, io.Discard)
 
-	handler := httpapi.DebugBackendsHandler(logger, nil)
+	handler := httpapi.DebugBackendsHandler(logger, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/backends", nil)
 	rec := httptest.NewRecorder()

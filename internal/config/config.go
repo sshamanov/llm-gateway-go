@@ -120,6 +120,7 @@ type SchedulerConfig struct {
 	AgingPerSecond                  float64     `json:"aging_per_second"`
 	UnknownTokensPerSecond          float64     `json:"unknown_tokens_per_second"`
 	UnknownColdLoadPenaltySeconds   float64     `json:"unknown_cold_load_penalty_seconds"`
+	ExplorationBonus                float64     `json:"exploration_bonus"`
 	AliasSubstitutionPenaltySeconds float64     `json:"alias_substitution_penalty_seconds"`
 	DisruptionFactor                float64     `json:"disruption_factor"`
 	Retry                           RetryConfig `json:"retry"`

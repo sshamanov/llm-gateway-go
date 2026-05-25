@@ -120,7 +120,17 @@
       document.getElementById('health').textContent = s.queue_pending > 10 ? 'busy' : 'healthy';
       document.getElementById('health').className = `badge ${badgeClass(s.queue_pending > 10 ? 'degraded' : 'healthy')}`;
 
-      let html = `<p>Queue: ${s.queue_total} total / ${s.queue_pending} pending</p>`;
+      let html = '<table>';
+      if (s.config) {
+        html += `<tr><td>Strategy</td><td>${s.config.strategy || '-'}</td></tr>`;
+        html += `<tr><td>Queue Max</td><td>${s.config.queue_max || '-'}</td></tr>`;
+        html += `<tr><td>Aging/s</td><td>${s.config.aging_per_sec || '-'}</td></tr>`;
+        html += `<tr><td>Retry Max</td><td>${s.config.retry_max || '-'}</td></tr>`;
+        html += `<tr><td>Lookahead</td><td>${s.config.top_n_lookahead || '-'}</td></tr>`;
+        html += `<tr><td>Exploration</td><td>${s.config.exploration_bonus || '-'}</td></tr>`;
+      }
+      html += `<tr><td>Tracked</td><td>${s.stats_count || 0} backend/model pairs</td></tr>`;
+      html += '</table>';
       el.innerHTML = html;
     } catch (err) { el.classList.add('stale'); }
   }
@@ -143,8 +153,8 @@
         }
         html += '</tbody></table>';
       }
-      if (data.native_models) {
-        html += '<h3>Native</h3><p>' + data.native_models.join(', ') + '</p>';
+      if (data.native_models && data.native_models.length > 0) {
+        html += '<h3>Native Models</h3><p>' + data.native_models.join(', ') + '</p>';
       }
       el.innerHTML = html || '<p>No models</p>';
     } catch (err) { el.classList.add('stale'); }
@@ -168,23 +178,55 @@
         return d.toLocaleTimeString();
       };
 
-      let html = `<p>Tracked backend+model pairs: ${s.stats_count || 0}</p>`;
-      html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>Cold Load</th><th>Failures</th><th>Last OK</th></tr></thead><tbody>';
+      let html = '';
+
+      // Split stats into learned (samples > 0) and failing-only (samples = 0).
+      const learned = {};
+      const failing = {};
       for (const [key, v] of Object.entries(s.stats)) {
-        const tps = (v.avg_tokens_per_second || 0).toFixed(1);
-        const cold = (v.avg_cold_load_time || 0).toFixed(2) + 's';
-        const fails = v.consecutive_failures || 0;
-        const failClass = fails > 0 ? ' style="color:#e74c3c;font-weight:bold"' : '';
-        html += `<tr>
-          <td>${key}</td>
-          <td>${v.samples || 0}</td>
-          <td>${tps}</td>
-          <td>${cold}</td>
-          <td${failClass}>${fails}</td>
-          <td>${formatTime(v.last_success)}</td>
-        </tr>`;
+        if (v.samples > 0) {
+          learned[key] = v;
+        } else if (v.consecutive_failures > 0) {
+          failing[key] = v;
+        }
       }
-      html += '</tbody></table>';
+
+      if (Object.keys(learned).length > 0) {
+        html += '<h3>Performance</h3>';
+        html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>Cold Load</th><th>Failures</th><th>Last OK</th></tr></thead><tbody>';
+        for (const [key, v] of Object.entries(learned)) {
+          const tps = (v.avg_tokens_per_second || 0).toFixed(1);
+          const cold = (v.avg_cold_load_time || 0).toFixed(2) + 's';
+          const fails = v.consecutive_failures || 0;
+          const failStyle = fails > 0 ? ' style="color:#e74c3c;font-weight:bold"' : '';
+          html += `<tr>
+            <td>${key}</td>
+            <td>${v.samples || 0}</td>
+            <td>${tps}</td>
+            <td>${cold}</td>
+            <td${failStyle}>${fails}</td>
+            <td>${formatTime(v.last_success)}</td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+      }
+
+      if (Object.keys(failing).length > 0) {
+        html += '<h3>Failing</h3>';
+        html += '<table><thead><tr><th>Backend|Model</th><th>Failures</th><th>Last Failure</th></tr></thead><tbody>';
+        for (const [key, v] of Object.entries(failing)) {
+          html += `<tr>
+            <td>${key}</td>
+            <td style="color:#e74c3c;font-weight:bold">${v.consecutive_failures || 0}</td>
+            <td>${formatTime(v.last_failure)}</td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+      }
+
+      if (!html) {
+        html = '<p>No learned stats yet — send requests to populate.</p>';
+      }
       el.innerHTML = html;
     } catch (err) { el.classList.add('stale'); }
   }

@@ -98,6 +98,7 @@ func DefaultConfig() Config {
 			AgingPerSecond:                  0.05,
 			UnknownTokensPerSecond:          5.0,
 			UnknownColdLoadPenaltySeconds:   30.0,
+			ExplorationBonus:                3.0,
 			AliasSubstitutionPenaltySeconds: 8.0,
 			DisruptionFactor:                0.25,
 			Retry: RetryConfig{

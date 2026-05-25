@@ -62,7 +62,7 @@ func NewRouter(
 
 	// Registry-dependent routes: only registered when registry is non-nil.
 	if registry != nil {
-		mux.Handle("GET /debug/backends", DebugBackendsHandler(logger, registry))
+		mux.Handle("GET /debug/backends", DebugBackendsHandler(logger, registry, sched.Scorer.Backends))
 		mux.Handle("GET /debug/models", DebugModelsHandler(logger, registry))
 		mux.Handle("GET /v1/models", openai.ModelsHandler(logger, registry))
 		if sched != nil {

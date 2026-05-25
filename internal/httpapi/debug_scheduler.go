@@ -33,6 +33,14 @@ func DebugSchedulerHandler(logger *logging.Logger, sched *scheduler.Scheduler) h
 			"queue_pending":  queueSnap.PendingCount,
 			"stats_count":    len(stats),
 			"stats":          stringStats,
+			"config": map[string]any{
+				"strategy":          sched.Scorer.Config.Strategy,
+				"queue_max":         sched.Scorer.Config.QueueMaxPending,
+				"aging_per_sec":     sched.Scorer.Config.AgingPerSecond,
+				"retry_max":         sched.Scorer.Config.Retry.MaxAttempts,
+				"top_n_lookahead":   sched.Scorer.Config.TopNLookahead,
+				"exploration_bonus": sched.Scorer.Config.ExplorationBonus,
+			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

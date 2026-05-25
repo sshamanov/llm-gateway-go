@@ -179,7 +179,7 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 		s.Scorer.Hosts.ReleaseHost(assignment.Host)
 		s.Scorer.Backends.ReleaseBackend(assignment.BackendID)
 		if job.State == StateRunning {
-			job.State = StateFailed
+			job.State = StateAborted
 		}
 		// Signal wakeup so dispatch re-evaluates available capacity.
 		select {
@@ -300,20 +300,20 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 		duration := time.Since(startTime)
 
 		if err != nil {
-			s.Stats.RecordFailure(BackendModelKey{
-				BackendID: currentBackendID,
-				ModelName: currentModel,
-			})
-			// If the client cancelled, skip retries and fail fast.
+			// If the client cancelled, abort without recording a failure.
 			if job.JobCtx != nil {
 				select {
 				case <-job.JobCtx.Done():
-					job.State = StateFailed
+					job.State = StateAborted
 					job.ResultChan <- JobResult{Err: job.JobCtx.Err()}
 					return
 				default:
 				}
 			}
+			s.Stats.RecordFailure(BackendModelKey{
+				BackendID: currentBackendID,
+				ModelName: currentModel,
+			})
 			if s.Logger != nil {
 				s.Logger.Warn("non-streaming request failed, will retry",
 					logging.String("job_id", job.ID),
@@ -364,7 +364,7 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 		s.Scorer.Hosts.ReleaseHost(currentHost)
 		s.Scorer.Backends.ReleaseBackend(currentBackendID)
 		if job.State == StateRunning {
-			job.State = StateFailed
+			job.State = StateAborted
 		}
 		close(job.StreamCh)
 		select {
@@ -445,6 +445,16 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 		// Send streaming request (context-aware).
 		streamCh, err := ollama.SendChatStream(job.JobCtx, s.Client, currentBaseURL, &chatReq)
 		if err != nil {
+			// If the client cancelled, abort without recording a failure.
+			if job.JobCtx != nil {
+				select {
+				case <-job.JobCtx.Done():
+					job.State = StateAborted
+					job.ResultChan <- JobResult{Err: job.JobCtx.Err()}
+					return
+				default:
+				}
+			}
 			s.Stats.RecordFailure(BackendModelKey{
 				BackendID: currentBackendID,
 				ModelName: currentModel,
@@ -464,7 +474,16 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 		// This implements retry allowed before first meaningful token.
 		firstChunk, ok := <-streamCh
 		if !ok {
-			// Stream closed immediately — treat as failure, retry.
+			// Stream closed immediately.
+			if job.JobCtx != nil {
+				select {
+				case <-job.JobCtx.Done():
+					job.State = StateAborted
+					job.ResultChan <- JobResult{Err: job.JobCtx.Err()}
+					return
+				default:
+				}
+			}
 			s.Stats.RecordFailure(BackendModelKey{
 				BackendID: currentBackendID,
 				ModelName: currentModel,
@@ -473,7 +492,15 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 		}
 
 		if firstChunk.Err != nil {
-			// Transport error on first chunk — retry.
+			if job.JobCtx != nil {
+				select {
+				case <-job.JobCtx.Done():
+					job.State = StateAborted
+					job.ResultChan <- JobResult{Err: job.JobCtx.Err()}
+					return
+				default:
+				}
+			}
 			s.Stats.RecordFailure(BackendModelKey{
 				BackendID: currentBackendID,
 				ModelName: currentModel,
@@ -497,12 +524,21 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 		for chunk := range streamCh {
 			if chunk.Err != nil {
 				// Error mid-stream: can't retry (already sent first chunk).
-				// Log and stop.
 				if s.Logger != nil {
 					s.Logger.Warn("streaming error mid-stream",
 						logging.String("job_id", job.ID),
 						logging.String("error", chunk.Err.Error()),
 					)
+				}
+				// Client disconnect is abort, not failure.
+				if job.JobCtx != nil {
+					select {
+					case <-job.JobCtx.Done():
+						job.State = StateAborted
+						job.ResultChan <- JobResult{Err: chunk.Err}
+						return
+					default:
+					}
 				}
 				job.State = StateFailed
 				job.ResultChan <- JobResult{Err: chunk.Err}

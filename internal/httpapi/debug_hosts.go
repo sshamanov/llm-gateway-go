@@ -18,6 +18,18 @@ func DebugHostsHandler(logger *logging.Logger, hosts *scheduler.HostLeaseManager
 			return
 		}
 		states := hosts.States()
+
+		// Filter out the "default" host when explicit hosts are configured.
+		if len(states) > 1 {
+			filtered := make([]scheduler.HostState, 0, len(states)-1)
+			for _, s := range states {
+				if s.HostID != "default" {
+					filtered = append(filtered, s)
+				}
+			}
+			states = filtered
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{"hosts": states})

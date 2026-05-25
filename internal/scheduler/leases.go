@@ -165,6 +165,7 @@ func (h *HostLeaseManager) States() []HostState {
 			Capacity:   int(max),
 		})
 	}
+	// Sort alphabetically by host_id for deterministic output.
 	sort.Slice(states, func(i, j int) bool { return states[i].HostID < states[j].HostID })
 	return states
 }

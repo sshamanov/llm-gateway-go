@@ -134,6 +134,15 @@ func (s *Scorer) Score(a *Assignment) float64 {
 	// aging_credit: jobs that have waited longer get a cost reduction.
 	agingCredit := a.Job.Duration().Seconds() * s.Config.AgingPerSecond
 
+	// exploration_credit: unknown backend/model pairs get a cost reduction
+	// that decays as samples accumulate. This creates natural round-robin
+	// exploration of untried backends.
+	explorationCredit := 0.0
+	if s.Config.ExplorationBonus > 0 {
+		samples := s.Stats.GetSamples(bmKey)
+		explorationCredit = s.Config.ExplorationBonus / (1.0 + float64(samples))
+	}
+
 	return backendWaitCost +
 		hostLoadCost +
 		modelSwitchCost +
@@ -142,7 +151,8 @@ func (s *Scorer) Score(a *Assignment) float64 {
 		substitutionCost +
 		failurePenalty -
 		priorityCredit -
-		agingCredit
+		agingCredit -
+		explorationCredit
 }
 
 // disruptionCost computes eviction cost when the candidate model is not loaded
