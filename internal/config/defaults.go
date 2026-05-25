@@ -45,16 +45,10 @@ func DefaultConfig() Config {
 		AudioBackends: []AudioBackendConfig{},
 		OllamaDefaults: OllamaDefaultsConfig{
 			KeepAlive: "10m",
-			Think:     false,
-			Options: OllamaOptions{
-				NumThread:   8,
-				NumCtx:      8192,
-				Temperature: 0.2,
-				TopP:        0.9,
-			},
+			Think:     ptrBool(false),
 		},
 		Models: ModelsConfig{
-			ExposeNativeOllamaModels: true,
+			ExposeNativeOllamaModels: false,
 			Aliases: []AliasConfig{
 				{
 					Name:         "qwen-instruct",
@@ -133,3 +127,5 @@ func SaveConfig(path string, cfg Config) error {
 
 	return nil
 }
+
+func ptrBool(b bool) *bool { return &b }

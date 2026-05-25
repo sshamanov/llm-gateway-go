@@ -38,6 +38,7 @@ func newTestScheduler(t *testing.T, cfg *config.Config, reg *backend.Registry, b
 		http.DefaultClient,
 		backendURLs,
 		nil,
+		nil,
 		reg.BackendSnapshots,
 	)
 }
@@ -307,6 +308,7 @@ func TestChatCompletions_QueueFull(t *testing.T) {
 		scorer,
 		stats,
 		http.DefaultClient,
+		nil,
 		nil,
 		nil,
 		func() []backend.BackendSnapshot { return nil },
@@ -858,6 +860,7 @@ func TestChatCompletions_Streaming_QueueFull(t *testing.T) {
 		http.DefaultClient,
 		nil,
 		nil,
+		nil,
 		func() []backend.BackendSnapshot { return nil },
 	)
 
@@ -1009,15 +1012,10 @@ func TestChatCompletions_NonStreaming_StillWorks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildOllamaRequest_DefaultsOnly(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	req := &chatCompletionRequest{
@@ -1043,23 +1041,8 @@ func TestBuildOllamaRequest_DefaultsOnly(t *testing.T) {
 	if *result.Think {
 		t.Error("expected Think to be false")
 	}
-	if result.Options == nil {
-		t.Fatal("expected non-nil Options")
-	}
-	if result.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4, got %d", result.Options.NumThread)
-	}
-	if result.Options.NumCtx != 8192 {
-		t.Errorf("expected NumCtx 8192, got %d", result.Options.NumCtx)
-	}
-	if result.Options.Temperature != 0.7 {
-		t.Errorf("expected Temperature 0.7, got %f", result.Options.Temperature)
-	}
-	if result.Options.TopP != 0.9 {
-		t.Errorf("expected TopP 0.9, got %f", result.Options.TopP)
-	}
-	if result.Options.NumPredict != 0 {
-		t.Errorf("expected NumPredict 0 (unset), got %d", result.Options.NumPredict)
+	if result.Options != nil {
+		t.Errorf("expected nil Options (no global defaults), got %+v", result.Options)
 	}
 	if len(result.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(result.Messages))
@@ -1073,12 +1056,10 @@ func TestBuildOllamaRequest_DefaultsOnly(t *testing.T) {
 }
 
 func TestBuildOllamaRequest_AliasThinkOverride(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread: 4, NumCtx: 8192, Temperature: 0.7, TopP: 0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	thinkTrue := true
@@ -1101,9 +1082,9 @@ func TestBuildOllamaRequest_AliasThinkOverride(t *testing.T) {
 	if !*result.Think {
 		t.Error("expected Think to be true (overridden by alias)")
 	}
-	// Other defaults should remain unchanged.
-	if result.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4 (kept from defaults), got %d", result.Options.NumThread)
+	// No global Options — Options should be nil (alias has no Options override).
+	if result.Options != nil {
+		t.Errorf("expected nil Options (no alias options), got %+v", result.Options)
 	}
 	if result.KeepAlive != "5m" {
 		t.Errorf("expected KeepAlive '5m', got %q", result.KeepAlive)
@@ -1111,15 +1092,10 @@ func TestBuildOllamaRequest_AliasThinkOverride(t *testing.T) {
 }
 
 func TestBuildOllamaRequest_AliasOptionsMerge(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	alias := &config.AliasConfig{
@@ -1127,8 +1103,7 @@ func TestBuildOllamaRequest_AliasOptionsMerge(t *testing.T) {
 		PrimaryModel: "test-model",
 		Overrides: config.AliasOverrides{
 			Options: &config.OllamaOptions{
-				Temperature: 0.1, // override
-				// NumThread is 0, should keep default
+				Temperature: 0.1,
 			},
 		},
 	}
@@ -1138,33 +1113,30 @@ func TestBuildOllamaRequest_AliasOptionsMerge(t *testing.T) {
 
 	result := buildOllamaRequest("test-model", messages, defaults, alias, req, config.PolicyConfig{})
 
-	// Zero-value alias options should not override defaults.
-	if result.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4 (kept from defaults), got %d", result.Options.NumThread)
+	// Alias options should be applied (only Temperature set, TopP is 0 so not applied).
+	if result.Options == nil {
+		t.Fatal("expected non-nil Options from alias override")
 	}
-	// Non-zero alias options should override.
 	if result.Options.Temperature != 0.1 {
 		t.Errorf("expected Temperature 0.1 (from alias override), got %f", result.Options.Temperature)
 	}
-	// Unchanged defaults.
-	if result.Options.NumCtx != 8192 {
-		t.Errorf("expected NumCtx 8192 (kept from defaults), got %d", result.Options.NumCtx)
+	// NumThread and NumCtx are not set by alias (only backend or global).
+	if result.Options.NumThread != 0 {
+		t.Errorf("expected NumThread 0 (not set by alias), got %d", result.Options.NumThread)
 	}
-	if result.Options.TopP != 0.9 {
-		t.Errorf("expected TopP 0.9 (kept from defaults), got %f", result.Options.TopP)
+	if result.Options.NumCtx != 0 {
+		t.Errorf("expected NumCtx 0 (not set by alias), got %d", result.Options.NumCtx)
+	}
+	if result.Options.TopP != 0 {
+		t.Errorf("expected TopP 0 (not set by alias), got %f", result.Options.TopP)
 	}
 }
 
 func TestBuildOllamaRequest_ClientOverridesAllowed(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	temp := 0.5
@@ -1181,6 +1153,9 @@ func TestBuildOllamaRequest_ClientOverridesAllowed(t *testing.T) {
 
 	result := buildOllamaRequest("test-model", messages, defaults, nil, req, policy)
 
+	if result.Options == nil {
+		t.Fatal("expected non-nil Options from client overrides")
+	}
 	if result.Options.NumPredict != 100 {
 		t.Errorf("expected NumPredict 100, got %d", result.Options.NumPredict)
 	}
@@ -1190,25 +1165,20 @@ func TestBuildOllamaRequest_ClientOverridesAllowed(t *testing.T) {
 	if result.Options.TopP != 0.8 {
 		t.Errorf("expected TopP 0.8 (client override), got %f", result.Options.TopP)
 	}
-	// Other defaults should remain.
-	if result.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4 (kept from defaults), got %d", result.Options.NumThread)
+	// NumThread and NumCtx only come from backend, not global defaults.
+	if result.Options.NumThread != 0 {
+		t.Errorf("expected NumThread 0 (not from global defaults), got %d", result.Options.NumThread)
 	}
-	if result.Options.NumCtx != 8192 {
-		t.Errorf("expected NumCtx 8192 (kept from defaults), got %d", result.Options.NumCtx)
+	if result.Options.NumCtx != 0 {
+		t.Errorf("expected NumCtx 0 (not from global defaults), got %d", result.Options.NumCtx)
 	}
 }
 
 func TestBuildOllamaRequest_ClientOverridesDisallowed(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	temp := 0.5
@@ -1223,37 +1193,32 @@ func TestBuildOllamaRequest_ClientOverridesDisallowed(t *testing.T) {
 
 	result := buildOllamaRequest("test-model", messages, defaults, nil, req, policy)
 
-	// Client overrides should be ignored.
-	if result.Options.NumPredict != 0 {
-		t.Errorf("expected NumPredict 0 (no override), got %d", result.Options.NumPredict)
-	}
-	if result.Options.Temperature != 0.7 {
-		t.Errorf("expected Temperature 0.7 (default preserved), got %f", result.Options.Temperature)
+	// Client overrides should be ignored when disallowed — Options stays nil.
+	if result.Options != nil {
+		t.Errorf("expected nil Options (client overrides disallowed, no alias), got %+v", result.Options)
 	}
 }
 
 func TestBuildOllamaRequest_FullStack(t *testing.T) {
 	// Test all three layers: defaults -> alias -> client overrides.
+	// Options are no longer global; Temperature/TopP come from alias only.
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	thinkTrue := true
+	aliasKeepAlive := "15m"
 	alias := &config.AliasConfig{
 		Name:         "test-alias",
 		PrimaryModel: "test-model",
 		Overrides: config.AliasOverrides{
-			Think: &thinkTrue,
+			Think:     &thinkTrue,
+			KeepAlive: aliasKeepAlive,
 			Options: &config.OllamaOptions{
 				Temperature: 0.1, // alias overrides temperature
-				// NumThread left at 0, should keep default
+				TopP:        0.85,
 			},
 		},
 	}
@@ -1272,9 +1237,9 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 
 	result := buildOllamaRequest("test-model", messages, defaults, alias, req, policy)
 
-	// Default KeepAlive.
-	if result.KeepAlive != "5m" {
-		t.Errorf("expected KeepAlive '5m', got %q", result.KeepAlive)
+	// Alias KeepAlive override.
+	if result.KeepAlive != "15m" {
+		t.Errorf("expected KeepAlive '15m' (alias override), got %q", result.KeepAlive)
 	}
 
 	// Alias think override.
@@ -1285,17 +1250,12 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 		t.Error("expected Think to be true (alias override)")
 	}
 
-	// Default NumThread kept (alias did not override, client did not override).
-	if result.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4, got %d", result.Options.NumThread)
-	}
-
-	// Temperature: defaults(0.7) -> alias(0.1) -> client(0.5) = 0.5 (client wins).
+	// Temperature: alias(0.1) -> client(0.5) = 0.5 (client wins).
 	if result.Options.Temperature != 0.5 {
 		t.Errorf("expected Temperature 0.5 (client overrides alias), got %f", result.Options.Temperature)
 	}
 
-	// TopP: defaults(0.9) -> client(0.8) = 0.8.
+	// TopP: alias(0.85) -> client(0.8) = 0.8 (client wins).
 	if result.Options.TopP != 0.8 {
 		t.Errorf("expected TopP 0.8, got %f", result.Options.TopP)
 	}
@@ -1303,6 +1263,14 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 	// MaxTokens -> NumPredict.
 	if result.Options.NumPredict != 200 {
 		t.Errorf("expected NumPredict 200, got %d", result.Options.NumPredict)
+	}
+
+	// NumThread/NumCtx are not set by alias, defaults, or client — only backend sets them.
+	if result.Options.NumThread != 0 {
+		t.Errorf("expected NumThread 0 (only backend sets it), got %d", result.Options.NumThread)
+	}
+	if result.Options.NumCtx != 0 {
+		t.Errorf("expected NumCtx 0 (only backend sets it), got %d", result.Options.NumCtx)
 	}
 }
 

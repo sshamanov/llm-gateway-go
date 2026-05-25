@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"llm-go-proxy/internal/backend"
+	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/logging"
 	"llm-go-proxy/internal/ollama"
 )
@@ -20,18 +21,19 @@ var ErrQueueFull = fmt.Errorf("scheduler: queue is at maximum pending capacity")
 // It accepts jobs, scores them against available backends, acquires host and
 // backend capacity leases, and runs each assignment in its own goroutine.
 type Scheduler struct {
-	Queue       *Queue
-	Scorer      *Scorer
-	Stats       *StatsTracker
-	Client      *http.Client
-	BackendURLs map[string]string // backend ID -> base URL
-	Logger      *logging.Logger
-	Ctx         context.Context
-	Cancel      context.CancelFunc
-	Wg          sync.WaitGroup
-	Wakeup      chan struct{} // buffered cap 1, signals dispatch to re-evaluate
-	Snapshots   func() []backend.BackendSnapshot
-	StartedAt   time.Time
+	Queue          *Queue
+	Scorer         *Scorer
+	Stats          *StatsTracker
+	Client         *http.Client
+	BackendURLs    map[string]string                  // backend ID -> base URL
+	BackendConfigs map[string]config.OllamaBackendConfig // backend ID -> config
+	Logger         *logging.Logger
+	Ctx            context.Context
+	Cancel         context.CancelFunc
+	Wg             sync.WaitGroup
+	Wakeup         chan struct{} // buffered cap 1, signals dispatch to re-evaluate
+	Snapshots      func() []backend.BackendSnapshot
+	StartedAt      time.Time
 }
 
 // NewScheduler creates a new Scheduler with the given components.
@@ -41,21 +43,23 @@ func NewScheduler(
 	stats *StatsTracker,
 	client *http.Client,
 	backendURLs map[string]string,
+	backendConfigs map[string]config.OllamaBackendConfig,
 	logger *logging.Logger,
 	snapshots func() []backend.BackendSnapshot,
 ) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		Queue:       queue,
-		Scorer:      scorer,
-		Stats:       stats,
-		Client:      client,
-		BackendURLs: backendURLs,
-		Logger:      logger,
-		Ctx:         ctx,
-		Cancel:      cancel,
-		Wakeup:      make(chan struct{}, 1),
-		Snapshots:   snapshots,
+		Queue:          queue,
+		Scorer:         scorer,
+		Stats:          stats,
+		Client:         client,
+		BackendURLs:    backendURLs,
+		BackendConfigs: backendConfigs,
+		Logger:         logger,
+		Ctx:            ctx,
+		Cancel:         cancel,
+		Wakeup:         make(chan struct{}, 1),
+		Snapshots:      snapshots,
 		StartedAt:   time.Now(),
 	}
 }
@@ -283,12 +287,14 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 		failedBackends[currentBackendID] = true
 
 		chatReq := ollama.ChatRequest{
-			Model:    currentModel,
-			Messages: job.Messages,
-			Stream:   false,
-			Options:  job.Options,
-			Think:    nil,
+			Model:     currentModel,
+			Messages:  job.Messages,
+			Stream:    false,
+			Options:   job.Options,
+			Think:     job.Think,
+			KeepAlive: job.KeepAlive,
 		}
+		s.mergeBackendOptions(&chatReq, currentBackendID)
 
 		ctx := job.JobCtx
 		if ctx == nil {
@@ -433,14 +439,14 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 
 		// Build streaming chat request.
 		chatReq := ollama.ChatRequest{
-			Model:    currentModel,
-			Messages: job.Messages,
-			Stream:   true,
-			Options:  job.Options,
+			Model:     currentModel,
+			Messages:  job.Messages,
+			Stream:    true,
+			Options:   job.Options,
+			Think:     job.Think,
+			KeepAlive: job.KeepAlive,
 		}
-		if job.Think != nil {
-			chatReq.Think = job.Think
-		}
+		s.mergeBackendOptions(&chatReq, currentBackendID)
 
 		// Send streaming request (context-aware).
 		streamCh, err := ollama.SendChatStream(job.JobCtx, s.Client, currentBaseURL, &chatReq)
@@ -609,6 +615,33 @@ func (s *Scheduler) findAlternativeBackend(job *Job, excludeBackends map[string]
 		}
 	}
 	return best
+}
+
+// mergeBackendOptions applies per-backend overrides on top of the handler-built
+// request options. Backend options (keep_alive, think, num_thread, num_ctx)
+// override values already set on the ChatRequest.
+func (s *Scheduler) mergeBackendOptions(req *ollama.ChatRequest, backendID string) {
+	bc, ok := s.BackendConfigs[backendID]
+	if !ok {
+		return
+	}
+	if bc.KeepAlive != "" {
+		req.KeepAlive = bc.KeepAlive
+	}
+	if bc.Think != nil {
+		req.Think = bc.Think
+	}
+	if bc.Options != nil {
+		if req.Options == nil {
+			req.Options = &ollama.ChatOptions{}
+		}
+		if bc.Options.NumThread != 0 {
+			req.Options.NumThread = bc.Options.NumThread
+		}
+		if bc.Options.NumCtx != 0 {
+			req.Options.NumCtx = bc.Options.NumCtx
+		}
+	}
 }
 
 // computeTPS estimates tokens per second from a ChatResponse.

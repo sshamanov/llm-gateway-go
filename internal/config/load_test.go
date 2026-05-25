@@ -90,20 +90,8 @@ func TestLoadConfig_Full(t *testing.T) {
 	if od.KeepAlive != "10m" {
 		t.Errorf("ollama_defaults.keep_alive = %q, want %q", od.KeepAlive, "10m")
 	}
-	if od.Think {
+	if od.Think == nil || *od.Think {
 		t.Error("ollama_defaults.think should be false")
-	}
-	if od.Options.NumThread != 8 {
-		t.Errorf("ollama_defaults.options.num_thread = %d, want 8", od.Options.NumThread)
-	}
-	if od.Options.NumCtx != 8192 {
-		t.Errorf("ollama_defaults.options.num_ctx = %d, want 8192", od.Options.NumCtx)
-	}
-	if od.Options.Temperature != 0.2 {
-		t.Errorf("ollama_defaults.options.temperature = %f, want 0.2", od.Options.Temperature)
-	}
-	if od.Options.TopP != 0.9 {
-		t.Errorf("ollama_defaults.options.top_p = %f, want 0.9", od.Options.TopP)
 	}
 
 	// Models
@@ -248,10 +236,6 @@ func TestLoadConfig_Partial(t *testing.T) {
 	if cfg.OllamaDefaults.KeepAlive != def.OllamaDefaults.KeepAlive {
 		t.Errorf("keep_alive = %q, want default %q",
 			cfg.OllamaDefaults.KeepAlive, def.OllamaDefaults.KeepAlive)
-	}
-	if cfg.OllamaDefaults.Options.NumThread != def.OllamaDefaults.Options.NumThread {
-		t.Errorf("num_thread = %d, want default %d",
-			cfg.OllamaDefaults.Options.NumThread, def.OllamaDefaults.Options.NumThread)
 	}
 
 	if cfg.Models.ExposeNativeOllamaModels != def.Models.ExposeNativeOllamaModels {

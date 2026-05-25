@@ -47,6 +47,7 @@ func newTestScheduler(t *testing.T, serverURL string, maxHostJobs int, cfg confi
 		stats,
 		http.DefaultClient,
 		map[string]string{"test-backend": serverURL},
+		nil,
 		nil, // logger — nil is safe (Scheduler guards calls)
 		snapshots,
 	)

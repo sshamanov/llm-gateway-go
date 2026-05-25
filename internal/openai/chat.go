@@ -130,7 +130,7 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 
 		// Step 7b: If streaming, handle via streaming path.
 		if chatReq.Stream != nil && *chatReq.Stream {
-			handleStreamChatCompletion(w, r, logger, sched, chatReq.Model, resolved.Candidates, resolved.AliasConfig, messages, ollamaReq.Options)
+			handleStreamChatCompletion(w, r, logger, sched, chatReq.Model, resolved.Candidates, resolved.AliasConfig, messages, ollamaReq.KeepAlive, ollamaReq.Think, ollamaReq.Options)
 			return
 		}
 
@@ -154,6 +154,8 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			Candidates:     resolved.Candidates,
 			AliasConfig:    resolved.AliasConfig,
 			Messages:       messages,
+			KeepAlive:      ollamaReq.KeepAlive,
+			Think:          ollamaReq.Think,
 			Options:        ollamaReq.Options,
 			ResultChan:     make(chan scheduler.JobResult, 1),
 			JobCtx:         jobCtx,
@@ -268,40 +270,30 @@ func buildOllamaRequest(
 	req *chatCompletionRequest,
 	policy config.PolicyConfig,
 ) ollama.ChatRequest {
-	// Step 1: Start from defaults.
-	thinkVal := defaults.Think
+	// Step 1: Start from global defaults (keep_alive, think only).
 	result := ollama.ChatRequest{
 		Model:     modelName,
 		Messages:  messages,
 		Stream:    false,
 		KeepAlive: defaults.KeepAlive,
-		Think:     &thinkVal,
-		Options: &ollama.ChatOptions{
-			NumThread:   defaults.Options.NumThread,
-			NumCtx:      defaults.Options.NumCtx,
-			Temperature: defaults.Options.Temperature,
-			TopP:        defaults.Options.TopP,
-		},
+		Think:     defaults.Think,
 	}
 
-	// Step 2: Alias overrides.
+	// Step 2: Alias overrides (think, temperature, top_p).
 	if alias != nil {
 		if alias.Overrides.Think != nil {
 			result.Think = alias.Overrides.Think
 		}
+		if alias.Overrides.KeepAlive != "" {
+			result.KeepAlive = alias.Overrides.KeepAlive
+		}
 		if alias.Overrides.Options != nil {
 			opts := alias.Overrides.Options
-			if opts.NumThread != 0 {
-				result.Options.NumThread = opts.NumThread
-			}
-			if opts.NumCtx != 0 {
-				result.Options.NumCtx = opts.NumCtx
-			}
-			if opts.Temperature != 0 {
-				result.Options.Temperature = opts.Temperature
-			}
-			if opts.TopP != 0 {
-				result.Options.TopP = opts.TopP
+			if opts.Temperature != 0 || opts.TopP != 0 {
+				result.Options = &ollama.ChatOptions{
+					Temperature: opts.Temperature,
+					TopP:        opts.TopP,
+				}
 			}
 		}
 	}
@@ -309,17 +301,29 @@ func buildOllamaRequest(
 	// Step 3: Client overrides (only if allowed by policy).
 	if policy.AllowClientOverrideOptions {
 		if req.MaxTokens > 0 {
+			if result.Options == nil {
+				result.Options = &ollama.ChatOptions{}
+			}
 			result.Options.NumPredict = req.MaxTokens
 		}
 		if req.Temperature != nil {
+			if result.Options == nil {
+				result.Options = &ollama.ChatOptions{}
+			}
 			result.Options.Temperature = *req.Temperature
 		}
 		if req.TopP != nil {
+			if result.Options == nil {
+				result.Options = &ollama.ChatOptions{}
+			}
 			result.Options.TopP = *req.TopP
 		}
 		if req.Stop != nil {
 			stops := parseStopField(req.Stop)
 			if len(stops) > 0 {
+				if result.Options == nil {
+					result.Options = &ollama.ChatOptions{}
+				}
 				result.Options.Stop = stops
 			}
 		}
@@ -356,6 +360,8 @@ func handleStreamChatCompletion(
 	candidates []string,
 	aliasConfig *config.AliasConfig,
 	messages []ollama.ChatMessage,
+	keepAlive string,
+	think *bool,
 	options *ollama.ChatOptions,
 ) {
 	// Set SSE headers.
@@ -386,12 +392,14 @@ func handleStreamChatCompletion(
 		ID:             jobID,
 		Kind:           scheduler.KindChat,
 		Priority:       scheduler.KindChat.Priority(),
-			CreatedAt:      time.Now(),
+		CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
 		Candidates:     candidates,
 		AliasConfig:    aliasConfig,
 		Messages:       messages,
+		KeepAlive:      keepAlive,
+		Think:          think,
 		Options:        options,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),

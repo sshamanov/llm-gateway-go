@@ -17,7 +17,13 @@
       "url": "http://127.0.0.1:11434",
       "host": "default",
       "max_concurrent_requests": 1,
-      "enabled": true
+      "enabled": true,
+      "keep_alive": "10m",
+      "think": false,
+      "options": {
+        "num_thread": 8,
+        "num_ctx": 8192
+      }
     }
   ],
   "image_backends": [
@@ -42,16 +48,10 @@
   ],
   "ollama_defaults": {
     "keep_alive": "10m",
-    "think": false,
-    "options": {
-      "num_thread": 8,
-      "num_ctx": 8192,
-      "temperature": 0.2,
-      "top_p": 0.9
-    }
+    "think": false
   },
   "models": {
-    "expose_native_ollama_models": true,
+    "expose_native_ollama_models": false,
     "aliases": [
       {
         "name": "qwen-instruct",
@@ -100,6 +100,7 @@
     "unknown_tokens_per_second": 5.0,
     "unknown_cold_load_penalty_seconds": 30.0,
     "alias_substitution_penalty_seconds": 8.0,
+    "exploration_bonus": 3.0,
     "disruption_factor": 0.25,
     "retry": {
       "max_attempts": 2,

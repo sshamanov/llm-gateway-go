@@ -557,6 +557,7 @@ func TestResponses_QueueFull(t *testing.T) {
 		http.DefaultClient,
 		nil,
 		nil,
+		nil,
 		func() []backend.BackendSnapshot { return nil },
 	)
 
@@ -866,6 +867,7 @@ func TestResponses_Streaming_QueueFull(t *testing.T) {
 		scorer,
 		stats,
 		http.DefaultClient,
+		nil,
 		nil,
 		nil,
 		func() []backend.BackendSnapshot { return nil },

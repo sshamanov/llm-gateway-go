@@ -304,30 +304,24 @@ func TestOllamaDefaultsAccessor(t *testing.T) {
 	// Nil registry returns zero value.
 	var reg *Registry
 	defaults := reg.OllamaDefaults()
-	if defaults.KeepAlive != "" || defaults.Think {
+	if defaults.KeepAlive != "" || defaults.Think != nil {
 		t.Errorf("expected zero value from nil registry, got %+v", defaults)
 	}
 
 	// Non-nil registry returns stored value.
+	thinkTrue := true
 	reg = &Registry{
 		ollamaDefaults: config.OllamaDefaultsConfig{
 			KeepAlive: "5m",
-			Think:     true,
-			Options:   config.OllamaOptions{NumThread: 4, NumCtx: 4096},
+			Think:     &thinkTrue,
 		},
 	}
 	defaults = reg.OllamaDefaults()
 	if defaults.KeepAlive != "5m" {
 		t.Errorf("expected KeepAlive '5m', got %q", defaults.KeepAlive)
 	}
-	if !defaults.Think {
+	if defaults.Think == nil || !*defaults.Think {
 		t.Errorf("expected Think true")
-	}
-	if defaults.Options.NumThread != 4 {
-		t.Errorf("expected NumThread 4, got %d", defaults.Options.NumThread)
-	}
-	if defaults.Options.NumCtx != 4096 {
-		t.Errorf("expected NumCtx 4096, got %d", defaults.Options.NumCtx)
 	}
 }
 

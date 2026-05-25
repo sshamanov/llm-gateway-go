@@ -43,14 +43,14 @@ func TestDefaultConfigValues(t *testing.T) {
 
 		// Ollama defaults
 		{"ollama_defaults.keep_alive", cfg.OllamaDefaults.KeepAlive, "10m"},
-		{"ollama_defaults.think", cfg.OllamaDefaults.Think, false},
-		{"ollama_defaults.options.num_thread", cfg.OllamaDefaults.Options.NumThread, 8},
-		{"ollama_defaults.options.num_ctx", cfg.OllamaDefaults.Options.NumCtx, 8192},
-		{"ollama_defaults.options.temperature", cfg.OllamaDefaults.Options.Temperature, 0.2},
-		{"ollama_defaults.options.top_p", cfg.OllamaDefaults.Options.TopP, 0.9},
+		{"ollama_defaults.think", *cfg.OllamaDefaults.Think, false},
+
+		// Ollama backend options
+		{"ollama_backends[0].keep_alive", cfg.OllamaBackends[0].KeepAlive, ""},
+		{"ollama_backends[0].think", cfg.OllamaBackends[0].Think, (*bool)(nil)},
 
 		// Models
-		{"models.expose_native_ollama_models", cfg.Models.ExposeNativeOllamaModels, true},
+		{"models.expose_native_ollama_models", cfg.Models.ExposeNativeOllamaModels, false},
 
 		// Aliases
 		{"models.aliases[0].name", cfg.Models.Aliases[0].Name, "qwen-instruct"},

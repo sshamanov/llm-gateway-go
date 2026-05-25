@@ -511,3 +511,14 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 - Performance panel: split Backend|Model key into separate Backend and Model columns
 - Added standalone Failures panel showing backend+model pairs with consecutive failures and last failure time
 - Failures panel includes all pairs with failures > 0 (not just samples=0), Performance panel shows only samples > 0
+
+- Removed global Options (num_thread, num_ctx, temperature, top_p) from OllamaDefaultsConfig — dangerous defaults applied to all backends
+- Added per-backend Options (num_thread, num_ctx), KeepAlive, Think to OllamaBackendConfig
+- Added KeepAlive to AliasOverrides; changed OllamaDefaults.Think from bool to *bool
+- Updated buildOllamaRequest: Options created lazily, no global defaults; alias only sets Temperature/TopP
+- Updated buildAnthropicOptions: now returns 3 values (options, think, keepAlive), no global Options
+- Added mergeBackendOptions to Scheduler: KeepAlive, Think, NumThread, NumCtx merged at dispatch
+- Fixed KeepAlive/Think plumbing: handlers set on Job, scheduler reads for ChatRequest
+- Updated harness.go with backendConfigs map; updated NewScheduler signature everywhere
+- Updated all test files: config, load, chat, responses, anthropic messages, backend resolve, scheduler
+- go build ./... clean, go vet ./... clean, 12 test packages pass, 19 mock E2E scenarios pass

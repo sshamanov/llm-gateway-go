@@ -92,7 +92,7 @@ func newSingleBackendScheduler(t *testing.T, server *httptest.Server, cfg config
 	}
 
 	return NewScheduler(NewQueue(cfg.AgingPerSecond), scorer, stats, http.DefaultClient,
-		map[string]string{"be": server.URL}, nil, snapshots)
+		map[string]string{"be": server.URL}, nil, nil, snapshots)
 }
 
 // newDualBackendScheduler creates a scheduler with two backends on separate servers.
@@ -129,7 +129,7 @@ func newDualBackendScheduler(t *testing.T, s1, s2 *httptest.Server, hostCapacity
 	}
 
 	return NewScheduler(NewQueue(cfg.AgingPerSecond), scorer, stats, http.DefaultClient,
-		map[string]string{"b1": s1.URL, "b2": s2.URL}, nil, snapshots)
+		map[string]string{"b1": s1.URL, "b2": s2.URL}, nil, nil, snapshots)
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ func TestScheduler_AliasFallbackLoadedBackup(t *testing.T) {
 	s := NewScheduler(
 		NewQueue(cfg.AgingPerSecond), scorer, stats, http.DefaultClient,
 		map[string]string{"b1": b1Server.URL, "b2": b2Server.URL},
-		nil, snapshots,
+		nil, nil, snapshots,
 	)
 	defer s.Stop()
 

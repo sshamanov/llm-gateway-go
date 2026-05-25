@@ -30,11 +30,14 @@ type HostConfig struct {
 
 // OllamaBackendConfig describes a single Ollama backend instance.
 type OllamaBackendConfig struct {
-	ID                   string `json:"id"`
-	URL                  string `json:"url"`
-	Host                 string `json:"host"`
-	MaxConcurrentRequests int    `json:"max_concurrent_requests"`
-	Enabled              bool   `json:"enabled"`
+	ID                    string         `json:"id"`
+	URL                   string         `json:"url"`
+	Host                  string         `json:"host"`
+	MaxConcurrentRequests int            `json:"max_concurrent_requests"`
+	Enabled               bool           `json:"enabled"`
+	KeepAlive             string         `json:"keep_alive,omitempty"`
+	Think                 *bool          `json:"think,omitempty"`
+	Options               *OllamaOptions `json:"options,omitempty"`
 }
 
 // ImageBackendConfig describes a single image-generation backend.
@@ -58,10 +61,10 @@ type AudioBackendConfig struct {
 }
 
 // OllamaDefaultsConfig holds default parameters applied to every Ollama request.
+// These are fallbacks; per-backend and per-alias overrides take precedence.
 type OllamaDefaultsConfig struct {
-	KeepAlive string        `json:"keep_alive"`
-	Think     bool          `json:"think"`
-	Options   OllamaOptions `json:"options"`
+	KeepAlive string `json:"keep_alive"`
+	Think     *bool  `json:"think,omitempty"`
 }
 
 // OllamaOptions maps to the "options" object in the Ollama /api/chat request.
@@ -89,8 +92,9 @@ type AliasConfig struct {
 // AliasOverrides optionally overrides Ollama defaults for a specific alias.
 // Pointer fields distinguish "not set" (nil) from "explicitly set to zero value".
 type AliasOverrides struct {
-	Think   *bool          `json:"think,omitempty"`
-	Options *OllamaOptions `json:"options,omitempty"`
+	KeepAlive string         `json:"keep_alive,omitempty"`
+	Think     *bool          `json:"think,omitempty"`
+	Options   *OllamaOptions `json:"options,omitempty"`
 }
 
 // PolicyConfig controls how the proxy handles client inputs.

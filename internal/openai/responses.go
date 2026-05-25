@@ -310,47 +310,53 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 
 		// Step 7: Build merged options.
 		defaults := registry.OllamaDefaults()
-		options := &ollama.ChatOptions{
-			NumThread:   defaults.Options.NumThread,
-			NumCtx:      defaults.Options.NumCtx,
-			Temperature: defaults.Options.Temperature,
-			TopP:        defaults.Options.TopP,
-		}
+		keepAlive := defaults.KeepAlive
+		think := defaults.Think
+		var options *ollama.ChatOptions
 
 		if resolved.AliasConfig != nil {
 			alias := resolved.AliasConfig
+			if alias.Overrides.Think != nil {
+				think = alias.Overrides.Think
+			}
+			if alias.Overrides.KeepAlive != "" {
+				keepAlive = alias.Overrides.KeepAlive
+			}
 			if alias.Overrides.Options != nil {
 				opts := alias.Overrides.Options
-				if opts.NumThread != 0 {
-					options.NumThread = opts.NumThread
-				}
-				if opts.NumCtx != 0 {
-					options.NumCtx = opts.NumCtx
-				}
-				if opts.Temperature != 0 {
-					options.Temperature = opts.Temperature
-				}
-				if opts.TopP != 0 {
-					options.TopP = opts.TopP
+				if opts.Temperature != 0 || opts.TopP != 0 {
+					options = &ollama.ChatOptions{
+						Temperature: opts.Temperature,
+						TopP:        opts.TopP,
+					}
 				}
 			}
 		}
 
 		if registry.Policy().AllowClientOverrideOptions {
 			if req.MaxOutputTokens > 0 {
+				if options == nil {
+					options = &ollama.ChatOptions{}
+				}
 				options.NumPredict = req.MaxOutputTokens
 			}
 			if req.Temperature != nil {
+				if options == nil {
+					options = &ollama.ChatOptions{}
+				}
 				options.Temperature = *req.Temperature
 			}
 			if req.TopP != nil {
+				if options == nil {
+					options = &ollama.ChatOptions{}
+				}
 				options.TopP = *req.TopP
 			}
 		}
 
 		// Step 8: If streaming, branch to streaming handler.
 		if req.Stream != nil && *req.Stream {
-			handleStreamResponses(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, options)
+			handleStreamResponses(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, think, options)
 			return
 		}
 
@@ -372,6 +378,8 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			CreatedAt:      time.Now(),
 			RequestedModel: req.Model,
 			Candidates:     resolved.Candidates,
+			KeepAlive:      keepAlive,
+			Think:          think,
 			AliasConfig:    resolved.AliasConfig,
 			Messages:       messages,
 			Options:        options,
@@ -463,6 +471,8 @@ func handleStreamResponses(
 	candidates []string,
 	aliasConfig *config.AliasConfig,
 	messages []ollama.ChatMessage,
+	keepAlive string,
+	think *bool,
 	options *ollama.ChatOptions,
 ) {
 	// Step 1: Set SSE headers.
@@ -492,12 +502,14 @@ func handleStreamResponses(
 		ID:             jobID,
 		Kind:           scheduler.KindChat,
 		Priority:       scheduler.KindChat.Priority(),
-			CreatedAt:      time.Now(),
+		CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
 		Candidates:     candidates,
 		AliasConfig:    aliasConfig,
 		Messages:       messages,
+		KeepAlive:      keepAlive,
+		Think:          think,
 		Options:        options,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),

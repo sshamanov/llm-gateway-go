@@ -277,7 +277,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 		}
 
 		// Step 8: Build merged options.
-		options, think := buildAnthropicOptions(
+		options, think, keepAlive := buildAnthropicOptions(
 			registry.OllamaDefaults(),
 			resolved.AliasConfig,
 			&req,
@@ -286,7 +286,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 
 		// Step 9: If streaming, branch to streaming handler.
 		if req.Stream != nil && *req.Stream {
-			handleStreamAnthropic(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, options, think)
+			handleStreamAnthropic(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, options, think)
 			return
 		}
 
@@ -312,6 +312,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			Messages:       messages,
 			Options:        options,
 			Think:          think,
+				KeepAlive:      keepAlive,
 			ResultChan:     make(chan scheduler.JobResult, 1),
 			JobCtx:         jobCtx,
 		}
@@ -354,8 +355,8 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 // ---------------------------------------------------------------------------
 
 // buildAnthropicOptions merges settings in order:
-//  1. Global ollama_defaults
-//  2. Alias overrides (if the request used an alias)
+//  1. Global ollama_defaults (keep_alive, think only)
+//  2. Alias overrides (think, temperature, top_p)
 //  3. req.MaxTokens → options.NumPredict (always applied)
 //  4. Client overrides (only if allow_client_override_options is true)
 //  5. Thinking override (if applicable)
@@ -364,61 +365,76 @@ func buildAnthropicOptions(
 	alias *config.AliasConfig,
 	req *anthropicMessageRequest,
 	policy config.PolicyConfig,
-) (options *ollama.ChatOptions, think *bool) {
-	// Step 1: Start from defaults.
-	options = &ollama.ChatOptions{
-		NumThread:   defaults.Options.NumThread,
-		NumCtx:      defaults.Options.NumCtx,
-		Temperature: defaults.Options.Temperature,
-		TopP:        defaults.Options.TopP,
-	}
+) (options *ollama.ChatOptions, think *bool, keepAlive string) {
+	keepAlive = defaults.KeepAlive
+	think = defaults.Think
 
-	// Step 2: Alias overrides (non-zero check pattern).
-	if alias != nil && alias.Overrides.Options != nil {
-		opts := alias.Overrides.Options
-		if opts.NumThread != 0 {
-			options.NumThread = opts.NumThread
+	// Step 1: Alias overrides (think, temperature, top_p).
+	if alias != nil {
+		if alias.Overrides.Think != nil {
+			think = alias.Overrides.Think
 		}
-		if opts.NumCtx != 0 {
-			options.NumCtx = opts.NumCtx
+		if alias.Overrides.KeepAlive != "" {
+			keepAlive = alias.Overrides.KeepAlive
 		}
-		if opts.Temperature != 0 {
-			options.Temperature = opts.Temperature
-		}
-		if opts.TopP != 0 {
-			options.TopP = opts.TopP
+		if alias.Overrides.Options != nil {
+			opts := alias.Overrides.Options
+			if opts.Temperature != 0 || opts.TopP != 0 {
+				options = &ollama.ChatOptions{
+					Temperature: opts.Temperature,
+					TopP:        opts.TopP,
+				}
+			}
 		}
 	}
 
-	// Step 3: req.MaxTokens → options.NumPredict (always).
+	// Step 2: req.MaxTokens → options.NumPredict (always).
 	if req.MaxTokens > 0 {
+		if options == nil {
+			options = &ollama.ChatOptions{}
+		}
 		options.NumPredict = req.MaxTokens
 	}
 
-	// Step 4: Client overrides (only if allowed by policy).
+	// Step 3: Client overrides (only if allowed by policy).
 	if policy.AllowClientOverrideOptions {
 		if req.Temperature != nil {
+			if options == nil {
+				options = &ollama.ChatOptions{}
+			}
 			options.Temperature = *req.Temperature
 		}
 		if req.TopP != nil {
+			if options == nil {
+				options = &ollama.ChatOptions{}
+			}
 			options.TopP = *req.TopP
 		}
 		if req.TopK != nil {
+			if options == nil {
+				options = &ollama.ChatOptions{}
+			}
 			options.TopK = *req.TopK
 		}
 		if len(req.StopSequences) > 0 {
+			if options == nil {
+				options = &ollama.ChatOptions{}
+			}
 			options.Stop = req.StopSequences
 		}
 	}
 
-	// Step 5: Thinking override.
+	// Step 4: Thinking override (client only, not from alias/defaults).
 	if req.Thinking != nil && req.Thinking.Type == "enabled" {
 		thinkBool := true
 		think = &thinkBool
+		if options == nil {
+			options = &ollama.ChatOptions{}
+		}
 		options.Temperature = 1.0
 	}
 
-	return options, think
+	return options, think, keepAlive
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +479,7 @@ func handleStreamAnthropic(
 	candidates []string,
 	aliasConfig *config.AliasConfig,
 	messages []ollama.ChatMessage,
+	keepAlive string,
 	options *ollama.ChatOptions,
 	think *bool,
 ) {
@@ -500,6 +517,7 @@ func handleStreamAnthropic(
 		AliasConfig:    aliasConfig,
 		Messages:       messages,
 		Options:        options,
+			KeepAlive:      keepAlive,
 		Think:          think,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),

@@ -179,9 +179,11 @@ func (h *Harness) StartProxy() error {
 
 	// Scheduler.
 	backendURLs := make(map[string]string, len(cfg.OllamaBackends))
+	backendConfigs := make(map[string]config.OllamaBackendConfig, len(cfg.OllamaBackends))
 	for _, bc := range cfg.OllamaBackends {
 		if bc.Enabled {
 			backendURLs[bc.ID] = bc.URL
+			backendConfigs[bc.ID] = bc
 		}
 	}
 	schedHosts := scheduler.NewHostLeaseManager(cfg.Hosts)
@@ -197,6 +199,7 @@ func (h *Harness) StartProxy() error {
 		schedStats,
 		http.DefaultClient,
 		backendURLs,
+		backendConfigs,
 		h.logger,
 		h.registry.BackendSnapshots,
 	)

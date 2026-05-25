@@ -38,6 +38,7 @@ func newTestScheduler(t *testing.T, cfg *config.Config, reg *backend.Registry, b
 		http.DefaultClient,
 		backendURLs,
 		nil,
+		nil,
 		reg.BackendSnapshots,
 	)
 }
@@ -680,6 +681,7 @@ func TestMessages_QueueFull(t *testing.T) {
 		http.DefaultClient,
 		nil,
 		nil,
+		nil,
 		func() []backend.BackendSnapshot { return nil },
 	)
 
@@ -889,15 +891,10 @@ func TestMessages_EmptyModel(t *testing.T) {
 }
 
 func TestBuildAnthropicOptions_ThinkOverride(t *testing.T) {
+	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
-		Think:     false,
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
+		Think:     &thinkFalse,
 	}
 
 	thinkingEnabled := "enabled"
@@ -910,8 +907,11 @@ func TestBuildAnthropicOptions_ThinkOverride(t *testing.T) {
 		},
 	}
 
-	options, think := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{})
+	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{})
 
+	if keepAlive != "5m" {
+		t.Errorf("expected KeepAlive '5m', got %q", keepAlive)
+	}
 	if options.Temperature != 1.0 {
 		t.Errorf("expected Temperature 1.0 (forced by thinking), got %f", options.Temperature)
 	}
@@ -924,24 +924,17 @@ func TestBuildAnthropicOptions_ThinkOverride(t *testing.T) {
 	if options.NumPredict != 100 {
 		t.Errorf("expected NumPredict 100, got %d", options.NumPredict)
 	}
-	// Other defaults should remain.
-	if options.NumThread != 4 {
-		t.Errorf("expected NumThread 4, got %d", options.NumThread)
+	// NumThread/NumCtx not set from global defaults; only from backend.
+	if options.NumThread != 0 {
+		t.Errorf("expected NumThread 0 (not from global), got %d", options.NumThread)
 	}
-	if options.NumCtx != 8192 {
-		t.Errorf("expected NumCtx 8192, got %d", options.NumCtx)
+	if options.NumCtx != 0 {
+		t.Errorf("expected NumCtx 0 (not from global), got %d", options.NumCtx)
 	}
 }
 
 func TestBuildAnthropicOptions_ClientOverrides(t *testing.T) {
-	defaults := config.OllamaDefaultsConfig{
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
-	}
+	defaults := config.OllamaDefaultsConfig{}
 
 	temp := 0.3
 	topP := 0.5
@@ -955,10 +948,13 @@ func TestBuildAnthropicOptions_ClientOverrides(t *testing.T) {
 		StopSequences: []string{"\n", "user:"},
 	}
 
-	options, think := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
+	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
 		AllowClientOverrideOptions: true,
 	})
 
+	if keepAlive != "" {
+		t.Errorf("expected empty KeepAlive, got %q", keepAlive)
+	}
 	if think != nil {
 		t.Error("expected nil think when thinking not enabled")
 	}
@@ -986,14 +982,7 @@ func TestBuildAnthropicOptions_ClientOverrides(t *testing.T) {
 }
 
 func TestBuildAnthropicOptions_ClientOverridesDisallowed(t *testing.T) {
-	defaults := config.OllamaDefaultsConfig{
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
-	}
+	defaults := config.OllamaDefaultsConfig{}
 
 	temp := 0.3
 	req := &anthropicMessageRequest{
@@ -1002,12 +991,13 @@ func TestBuildAnthropicOptions_ClientOverridesDisallowed(t *testing.T) {
 		Temperature: &temp,
 	}
 
-	options, _ := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
+	options, _, _ := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
 		AllowClientOverrideOptions: false,
 	})
 
-	if options.Temperature != 0.7 {
-		t.Errorf("expected Temperature 0.7 (default preserved), got %f", options.Temperature)
+	// Temperature should be 0 (no global, no alias, client override disallowed).
+	if options.Temperature != 0 {
+		t.Errorf("expected Temperature 0 (no global/alias defaults), got %f", options.Temperature)
 	}
 	// MaxTokens always applies regardless of AllowClientOverrideOptions.
 	if options.NumPredict != 200 {
@@ -1016,14 +1006,7 @@ func TestBuildAnthropicOptions_ClientOverridesDisallowed(t *testing.T) {
 }
 
 func TestBuildAnthropicOptions_AliasOverrides(t *testing.T) {
-	defaults := config.OllamaDefaultsConfig{
-		Options: config.OllamaOptions{
-			NumThread:   4,
-			NumCtx:      8192,
-			Temperature: 0.7,
-			TopP:        0.9,
-		},
-	}
+	defaults := config.OllamaDefaultsConfig{}
 
 	alias := &config.AliasConfig{
 		Name: "test-alias",
@@ -1039,19 +1022,20 @@ func TestBuildAnthropicOptions_AliasOverrides(t *testing.T) {
 		MaxTokens: 100,
 	}
 
-	options, _ := buildAnthropicOptions(defaults, alias, req, config.PolicyConfig{})
+	options, _, _ := buildAnthropicOptions(defaults, alias, req, config.PolicyConfig{})
 
 	if options.Temperature != 0.1 {
 		t.Errorf("expected Temperature 0.1 (alias override), got %f", options.Temperature)
 	}
-	if options.NumThread != 4 {
-		t.Errorf("expected NumThread 4 (kept from defaults), got %d", options.NumThread)
+	// NumThread/NumCtx are not set by alias — only by backend.
+	if options.NumThread != 0 {
+		t.Errorf("expected NumThread 0 (not from alias/defaults), got %d", options.NumThread)
 	}
-	if options.NumCtx != 8192 {
-		t.Errorf("expected NumCtx 8192 (kept from defaults), got %d", options.NumCtx)
+	if options.NumCtx != 0 {
+		t.Errorf("expected NumCtx 0 (not from alias/defaults), got %d", options.NumCtx)
 	}
-	if options.TopP != 0.9 {
-		t.Errorf("expected TopP 0.9 (kept from defaults), got %f", options.TopP)
+	if options.TopP != 0 {
+		t.Errorf("expected TopP 0 (not from alias/defaults), got %f", options.TopP)
 	}
 }
 

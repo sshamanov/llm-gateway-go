@@ -61,9 +61,11 @@ func run() error {
 
 	// Scheduler for queue-based dispatch of LLM requests.
 	backendURLs := make(map[string]string, len(cfg.OllamaBackends))
+	backendConfigs := make(map[string]config.OllamaBackendConfig, len(cfg.OllamaBackends))
 	for _, bc := range cfg.OllamaBackends {
 		if bc.Enabled {
 			backendURLs[bc.ID] = bc.URL
+			backendConfigs[bc.ID] = bc
 		}
 	}
 	backendHosts := collectBackendHosts(&cfg)
@@ -80,6 +82,7 @@ func run() error {
 		schedStats,
 		http.DefaultClient,
 		backendURLs,
+		backendConfigs,
 		logger,
 		registry.BackendSnapshots,
 	)
