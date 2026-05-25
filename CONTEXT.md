@@ -507,3 +507,7 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 - Added ExplorationBonus to SchedulerConfig (default 3.0) — unknown backend/model pairs get cost reduction decaying as 1/(1+samples), creating natural round-robin exploration
 - Added GetSamples method to StatsTracker, exploration_credit to Score(), exploration_bonus to debug scheduler endpoint and UI panel
 - All tests pass, build clean
+- Split Models panel into Aliases (with table) and Native Models (comma-separated list) as separate panels
+- Performance panel: split Backend|Model key into separate Backend and Model columns
+- Added standalone Failures panel showing backend+model pairs with consecutive failures and last failure time
+- Failures panel includes all pairs with failures > 0 (not just samples=0), Performance panel shows only samples > 0

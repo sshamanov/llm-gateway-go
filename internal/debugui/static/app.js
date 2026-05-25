@@ -135,15 +135,15 @@
     } catch (err) { el.classList.add('stale'); }
   }
 
-  // ---- Models Panel ----
-  async function updateModels() {
-    const el = document.getElementById('models-content');
+  // ---- Aliases Panel ----
+  async function updateAliases() {
+    const el = document.getElementById('aliases-content');
     try {
       const data = await fetchJSON('/debug/models');
       if (!data) { el.innerHTML = '<p>No data</p>'; return; }
       let html = '';
       if (data.aliases && data.aliases.length > 0) {
-        html += '<h3>Aliases</h3><table><thead><tr><th>Name</th><th>Primary</th><th>Backups</th></tr></thead><tbody>';
+        html += '<table><thead><tr><th>Name</th><th>Primary</th><th>Backups</th></tr></thead><tbody>';
         for (const a of data.aliases) {
           html += `<tr>
             <td>${a.name || '-'}</td>
@@ -153,10 +153,21 @@
         }
         html += '</tbody></table>';
       }
+      el.innerHTML = html || '<p>No aliases</p>';
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Models Panel (native) ----
+  async function updateModels() {
+    const el = document.getElementById('models-content');
+    try {
+      const data = await fetchJSON('/debug/models');
+      if (!data) { el.innerHTML = '<p>No data</p>'; return; }
       if (data.native_models && data.native_models.length > 0) {
-        html += '<h3>Native Models</h3><p>' + data.native_models.join(', ') + '</p>';
+        el.innerHTML = '<p>' + data.native_models.join(', ') + '</p>';
+      } else {
+        el.innerHTML = '<p>No native models</p>';
       }
-      el.innerHTML = html || '<p>No models</p>';
     } catch (err) { el.classList.add('stale'); }
   }
 
@@ -178,55 +189,84 @@
         return d.toLocaleTimeString();
       };
 
-      let html = '';
-
-      // Split stats into learned (samples > 0) and failing-only (samples = 0).
+      // Only show pairs with samples > 0 (learned).
       const learned = {};
-      const failing = {};
       for (const [key, v] of Object.entries(s.stats)) {
         if (v.samples > 0) {
           learned[key] = v;
-        } else if (v.consecutive_failures > 0) {
+        }
+      }
+
+      if (Object.keys(learned).length === 0) {
+        el.innerHTML = '<p>No learned stats yet — send requests to populate.</p>';
+        return;
+      }
+
+      let html = '<table><thead><tr><th>Backend</th><th>Model</th><th>Samples</th><th>TPS</th><th>Cold Load</th><th>Last OK</th></tr></thead><tbody>';
+      for (const [key, v] of Object.entries(learned)) {
+        const parts = key.split('/');
+        const backend = parts[0] || key;
+        const model = parts.slice(1).join('/') || '-';
+        const tps = (v.avg_tokens_per_second || 0).toFixed(1);
+        const cold = (v.avg_cold_load_time || 0).toFixed(2) + 's';
+        html += `<tr>
+          <td>${backend}</td>
+          <td>${model}</td>
+          <td>${v.samples || 0}</td>
+          <td>${tps}</td>
+          <td>${cold}</td>
+          <td>${formatTime(v.last_success)}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    } catch (err) { el.classList.add('stale'); }
+  }
+
+  // ---- Failures Panel ----
+  async function updateFailures() {
+    const el = document.getElementById('failures-content');
+    try {
+      const data = await fetchJSON('/debug/scheduler');
+      if (!data || !data.scheduler) { el.innerHTML = '<p>No data</p>'; return; }
+      const s = data.scheduler;
+      if (!s.stats || Object.keys(s.stats).length === 0) {
+        el.innerHTML = '<p>No failures</p>';
+        return;
+      }
+
+      const formatTime = (t) => {
+        if (!t) return '-';
+        const d = new Date(t);
+        return d.toLocaleTimeString();
+      };
+
+      // Collect pairs with failures (even if they have samples).
+      const failing = {};
+      for (const [key, v] of Object.entries(s.stats)) {
+        if (v.consecutive_failures > 0) {
           failing[key] = v;
         }
       }
 
-      if (Object.keys(learned).length > 0) {
-        html += '<h3>Performance</h3>';
-        html += '<table><thead><tr><th>Backend|Model</th><th>Samples</th><th>TPS</th><th>Cold Load</th><th>Failures</th><th>Last OK</th></tr></thead><tbody>';
-        for (const [key, v] of Object.entries(learned)) {
-          const tps = (v.avg_tokens_per_second || 0).toFixed(1);
-          const cold = (v.avg_cold_load_time || 0).toFixed(2) + 's';
-          const fails = v.consecutive_failures || 0;
-          const failStyle = fails > 0 ? ' style="color:#e74c3c;font-weight:bold"' : '';
-          html += `<tr>
-            <td>${key}</td>
-            <td>${v.samples || 0}</td>
-            <td>${tps}</td>
-            <td>${cold}</td>
-            <td${failStyle}>${fails}</td>
-            <td>${formatTime(v.last_success)}</td>
-          </tr>`;
-        }
-        html += '</tbody></table>';
+      if (Object.keys(failing).length === 0) {
+        el.innerHTML = '<p>No failures</p>';
+        return;
       }
 
-      if (Object.keys(failing).length > 0) {
-        html += '<h3>Failing</h3>';
-        html += '<table><thead><tr><th>Backend|Model</th><th>Failures</th><th>Last Failure</th></tr></thead><tbody>';
-        for (const [key, v] of Object.entries(failing)) {
-          html += `<tr>
-            <td>${key}</td>
-            <td style="color:#e74c3c;font-weight:bold">${v.consecutive_failures || 0}</td>
-            <td>${formatTime(v.last_failure)}</td>
-          </tr>`;
-        }
-        html += '</tbody></table>';
+      let html = '<table><thead><tr><th>Backend</th><th>Model</th><th>Failures</th><th>Last Failure</th></tr></thead><tbody>';
+      for (const [key, v] of Object.entries(failing)) {
+        const parts = key.split('/');
+        const backend = parts[0] || key;
+        const model = parts.slice(1).join('/') || '-';
+        html += `<tr>
+          <td>${backend}</td>
+          <td>${model}</td>
+          <td style="color:#e74c3c;font-weight:bold">${v.consecutive_failures || 0}</td>
+          <td>${formatTime(v.last_failure)}</td>
+        </tr>`;
       }
-
-      if (!html) {
-        html = '<p>No learned stats yet — send requests to populate.</p>';
-      }
+      html += '</tbody></table>';
       el.innerHTML = html;
     } catch (err) { el.classList.add('stale'); }
   }
@@ -239,10 +279,12 @@
   function poll() {
     updateBackends();
     updateHosts();
+    updateAliases();
+    updateModels();
     updateQueue();
     updateScheduler();
-    updateModels();
     updateStats();
+    updateFailures();
     updateTimestamp();
   }
 
@@ -250,9 +292,11 @@
   poll();
   setInterval(updateBackends, POLL_INTERVALS.backends);
   setInterval(updateHosts, POLL_INTERVALS.hosts);
+  setInterval(updateAliases, POLL_INTERVALS.models);
+  setInterval(updateModels, POLL_INTERVALS.models);
   setInterval(updateQueue, POLL_INTERVALS.queue);
   setInterval(updateScheduler, POLL_INTERVALS.scheduler);
-  setInterval(updateModels, POLL_INTERVALS.models);
   setInterval(updateStats, POLL_INTERVALS.config);
+  setInterval(updateFailures, POLL_INTERVALS.config);
   setInterval(updateTimestamp, 1000);
 })();
