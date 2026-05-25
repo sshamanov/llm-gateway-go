@@ -641,6 +641,15 @@ func (s *Scheduler) mergeBackendOptions(req *ollama.ChatRequest, backendID strin
 		if bc.Options.NumCtx != 0 {
 			req.Options.NumCtx = bc.Options.NumCtx
 		}
+		if bc.Options.TopK != 0 {
+			req.Options.TopK = bc.Options.TopK
+		}
+		if bc.Options.RepeatPenalty != 0 {
+			req.Options.RepeatPenalty = bc.Options.RepeatPenalty
+		}
+		if bc.Options.NumPredict != 0 {
+			req.Options.NumPredict = bc.Options.NumPredict
+		}
 	}
 }
 

@@ -522,3 +522,13 @@ Implemented `/v1/images/generations` with image backend pool and host-aware sche
 - Updated harness.go with backendConfigs map; updated NewScheduler signature everywhere
 - Updated all test files: config, load, chat, responses, anthropic messages, backend resolve, scheduler
 - go build ./... clean, go vet ./... clean, 12 test packages pass, 19 mock E2E scenarios pass
+- Moved NumCtx from backend-only to alias+backend: num_ctx is per-model, aliases set it, backend overrides as hardware cap
+- NumThread stays backend-only: hardware-specific, not per-model
+- Added TopK, RepeatPenalty, NumPredict to config.OllamaOptions (aliases + backends) and RepeatPenalty to ollama.ChatOptions
+- Wired TopK, RepeatPenalty, NumPredict through buildOllamaRequest, buildAnthropicOptions, responses.go, mergeBackendOptions
+- Updated config.example.json aliases and backends with num_ctx, top_k, repeat_penalty, num_predict
+- Added alias inheritance: AliasConfig.Extends field references a parent alias by name; child inherits PrimaryModel, BackupModels, and Overrides (deep-merged, child wins)
+- resolveAliasInheritance called from LoadConfig; detects circular refs, missing parents, duplicates, chain depth >10
+- 7 unit tests for inheritance: basic, override-models, 3-chain, circular, missing-parent, no-extends, empty, duplicate
+- Updated config.example.json: base-agent extended by coding-agent, email-agent, qwen-thinking; all 19 E2E pass
+- Updated test comments to reflect NumCtx can come from alias; all 12 packages pass, 19 E2E pass

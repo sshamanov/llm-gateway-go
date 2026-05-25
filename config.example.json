@@ -22,7 +22,10 @@
       "think": false,
       "options": {
         "num_thread": 8,
-        "num_ctx": 8192
+        "num_ctx": 8192,
+        "top_k": 40,
+        "repeat_penalty": 1.1,
+        "num_predict": -1
       }
     }
   ],
@@ -54,20 +57,42 @@
     "expose_native_ollama_models": false,
     "aliases": [
       {
-        "name": "qwen-instruct",
+        "name": "base-agent",
         "primary_model": "qwen:30b",
         "backup_models": ["qwen:14b", "qwen:72b"],
         "overrides": {
           "think": false,
           "options": {
-            "temperature": 0.2
+            "num_ctx": 8192,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.1,
+            "num_predict": -1
+          }
+        }
+      },
+      {
+        "name": "coding-agent",
+        "extends": "base-agent",
+        "overrides": {
+          "options": {
+            "temperature": 0.1
+          }
+        }
+      },
+      {
+        "name": "email-agent",
+        "extends": "base-agent",
+        "overrides": {
+          "options": {
+            "temperature": 0.7
           }
         }
       },
       {
         "name": "qwen-thinking",
-        "primary_model": "qwen:30b",
-        "backup_models": ["qwen:14b", "qwen:72b"],
+        "extends": "base-agent",
         "overrides": {
           "think": true,
           "options": {

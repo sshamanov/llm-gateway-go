@@ -69,10 +69,13 @@ type OllamaDefaultsConfig struct {
 
 // OllamaOptions maps to the "options" object in the Ollama /api/chat request.
 type OllamaOptions struct {
-	NumThread   int     `json:"num_thread"`
-	NumCtx      int     `json:"num_ctx"`
-	Temperature float64 `json:"temperature"`
-	TopP        float64 `json:"top_p"`
+	NumThread      int     `json:"num_thread"`
+	NumCtx         int     `json:"num_ctx"`
+	Temperature    float64 `json:"temperature"`
+	TopP           float64 `json:"top_p"`
+	TopK           int     `json:"top_k"`
+	RepeatPenalty  float64 `json:"repeat_penalty"`
+	NumPredict     int     `json:"num_predict"`
 }
 
 // ModelsConfig controls model exposure and aliases.
@@ -82,10 +85,13 @@ type ModelsConfig struct {
 }
 
 // AliasConfig maps a user-facing model name to concrete model candidates.
+// When Extends is set, PrimaryModel and BackupModels are inherited from the
+// parent alias; child Overrides are deep-merged on top of the parent's.
 type AliasConfig struct {
 	Name         string         `json:"name"`
-	PrimaryModel string         `json:"primary_model"`
-	BackupModels []string       `json:"backup_models"`
+	Extends      string         `json:"extends,omitempty"`
+	PrimaryModel string         `json:"primary_model,omitempty"`
+	BackupModels []string       `json:"backup_models,omitempty"`
 	Overrides    AliasOverrides `json:"overrides"`
 }
 

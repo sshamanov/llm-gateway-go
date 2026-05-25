@@ -39,5 +39,11 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parsing config: %w", err)
 	}
 
+	resolved, err := resolveAliasInheritance(cfg.Models.Aliases)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolving alias inheritance: %w", err)
+	}
+	cfg.Models.Aliases = resolved
+
 	return cfg, nil
 }

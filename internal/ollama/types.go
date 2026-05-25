@@ -64,13 +64,14 @@ type ChatMessage struct {
 
 // ChatOptions maps to the "options" object in the Ollama /api/chat request.
 type ChatOptions struct {
-	NumThread   int      `json:"num_thread,omitempty"`
-	NumCtx      int      `json:"num_ctx,omitempty"`
-	Temperature float64  `json:"temperature,omitempty"`
-	TopP        float64  `json:"top_p,omitempty"`
-	TopK        int      `json:"top_k,omitempty"`
-	NumPredict  int      `json:"num_predict,omitempty"`
-	Stop        []string `json:"stop,omitempty"`
+	NumThread      int      `json:"num_thread,omitempty"`
+	NumCtx         int      `json:"num_ctx,omitempty"`
+	Temperature    float64  `json:"temperature,omitempty"`
+	TopP           float64  `json:"top_p,omitempty"`
+	TopK           int      `json:"top_k,omitempty"`
+	RepeatPenalty  float64  `json:"repeat_penalty,omitempty"`
+	NumPredict     int      `json:"num_predict,omitempty"`
+	Stop           []string `json:"stop,omitempty"`
 }
 
 // ChatResponse is the response from Ollama's POST /api/chat (non-streaming).
