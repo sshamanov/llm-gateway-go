@@ -1020,7 +1020,7 @@ func TestBuildOllamaRequest_DefaultsOnly(t *testing.T) {
 
 	req := &chatCompletionRequest{
 		Model:    "test-model",
-		Messages: []chatRequestMessage{{Role: "user", Content: "Hello"}},
+		Messages: []chatRequestMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
 	}
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hello"}}
 

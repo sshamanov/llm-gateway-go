@@ -35,8 +35,24 @@ type chatCompletionRequest struct {
 
 // chatRequestMessage is a single message in the incoming request.
 type chatRequestMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// openaiContentPart represents a single block in an array-typed message content.
+// Used for multimodal messages where content is an array like:
+//
+//	[{"type":"text","text":"..."}, {"type":"image_url","image_url":{"url":"data:..."}}]
+type openaiContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openaiImageURL `json:"image_url,omitempty"`
+}
+
+// openaiImageURL holds the image URL in a content part.
+type openaiImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // chatCompletionResponse is the OpenAI-compatible chat completions response body.
@@ -113,9 +129,10 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 		}
 
 		// Step 6: Convert messages.
-		messages := make([]ollama.ChatMessage, len(chatReq.Messages))
-		for i, msg := range chatReq.Messages {
-			messages[i] = ollama.ChatMessage{Role: msg.Role, Content: msg.Content}
+		messages, err := convertOpenAIChatMessages(chatReq.Messages)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid messages: "+err.Error(), "invalid_request_error", "")
+			return
 		}
 
 		// Step 7: Build merged options using the first candidate.
@@ -256,6 +273,52 @@ func writeJSONError(w http.ResponseWriter, status int, message, errType, code st
 			Code:    code,
 		},
 	})
+}
+
+// convertOpenAIChatMessages converts OpenAI-format chat messages to Ollama format.
+// Each message's content may be a plain string or an array of content parts
+// (multimodal / vision requests).
+func convertOpenAIChatMessages(msgs []chatRequestMessage) ([]ollama.ChatMessage, error) {
+	result := make([]ollama.ChatMessage, 0, len(msgs))
+	for _, msg := range msgs {
+		var contentStr string
+		if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
+			result = append(result, ollama.ChatMessage{
+				Role:    msg.Role,
+				Content: contentStr,
+			})
+			continue
+		}
+		var parts []openaiContentPart
+		if err := json.Unmarshal(msg.Content, &parts); err != nil {
+			return nil, fmt.Errorf("convert message: %w", err)
+		}
+		text, images, err := convertContentParts(parts)
+		if err != nil {
+			return nil, fmt.Errorf("convert message: %w", err)
+		}
+		result = append(result, ollama.ChatMessage{
+			Role:    msg.Role,
+			Content: text,
+			Images:  images,
+		})
+	}
+	return result, nil
+}
+
+// convertContentParts extracts text and images from an array of content parts.
+func convertContentParts(parts []openaiContentPart) (text string, images []string, err error) {
+	for _, part := range parts {
+		switch part.Type {
+		case "text":
+			text += part.Text
+		case "image_url":
+			if part.ImageURL != nil && part.ImageURL.URL != "" {
+				images = append(images, part.ImageURL.URL)
+			}
+		}
+	}
+	return text, images, nil
 }
 
 // buildOllamaRequest assembles an Ollama ChatRequest by merging settings in order:
