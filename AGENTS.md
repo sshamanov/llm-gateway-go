@@ -78,6 +78,12 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
 
 ## Agent Operational Rules
 
+0. **No autonomous actions without a task**: Do not start, stop, build, run, or modify
+   anything unless the user has explicitly asked for it. Exploration (reading files,
+   searching code, asking questions) is fine. Actions (running servers, editing files,
+   creating commits, executing commands that change state) require an explicit task
+   from the user. A bare `@` or empty prompt is not a task — ask, don't guess.
+
 1. **Read all authority sources on startup**: `AGENTS.md`, `ARCHITECTURE.md`, `DESIGN.md`,
    `CONTEXT.md`, recent `git log`. Check for missing parts, misalignments, and the last tasks
    worked on.
@@ -154,17 +160,17 @@ Wrap at 72.>
 ### Stack
 
 - **Language**: Go
-- **Build**: Go modules, `go build`
-- **Dev runner**: `go run ./cmd/proxy`
 - **Lint/format**: `go vet`, `gofmt`
 - **Docker**: multi-stage build, always use `--network host` for build and `network_mode: host` for run
+- **Runtime**: Docker-only. The binary is never run directly on the host. Docker Compose is the sole supported runtime entrypoint.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `go run ./cmd/proxy` | Start dev server |
-| `go build -o bin/proxy ./cmd/proxy` | Build binary |
+| `docker compose up -d` | Start the service (canonical) |
+| `docker compose logs -f` | Follow service logs |
+| `docker compose down` | Stop the service |
 | `go test ./...` | Run all tests |
 | `go vet ./...` | Run vet linter |
 | `gofmt -w .` | Format all Go files |
