@@ -650,6 +650,9 @@ func (s *Scheduler) mergeBackendOptions(req *ollama.ChatRequest, backendID strin
 		if bc.Options.NumPredict != 0 {
 			req.Options.NumPredict = bc.Options.NumPredict
 		}
+		if bc.Options.UseMmap != nil {
+			req.Options.UseMmap = bc.Options.UseMmap
+		}
 	}
 }
 

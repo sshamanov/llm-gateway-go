@@ -325,7 +325,8 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			if alias.Overrides.Options != nil {
 				opts := alias.Overrides.Options
 				if opts.Temperature != 0 || opts.TopP != 0 || opts.TopK != 0 ||
-					opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 {
+					opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 ||
+					opts.UseMmap != nil {
 					options = &ollama.ChatOptions{
 						Temperature:   opts.Temperature,
 						TopP:          opts.TopP,
@@ -333,6 +334,7 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 						RepeatPenalty: opts.RepeatPenalty,
 						NumPredict:    opts.NumPredict,
 						NumCtx:        opts.NumCtx,
+						UseMmap:       opts.UseMmap,
 					}
 				}
 			}

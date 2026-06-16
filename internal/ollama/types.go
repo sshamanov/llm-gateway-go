@@ -72,6 +72,7 @@ type ChatOptions struct {
 	RepeatPenalty  float64  `json:"repeat_penalty,omitempty"`
 	NumPredict     int      `json:"num_predict,omitempty"`
 	Stop           []string `json:"stop,omitempty"`
+	UseMmap        *bool    `json:"use_mmap,omitempty"`
 }
 
 // ChatResponse is the response from Ollama's POST /api/chat (non-streaming).

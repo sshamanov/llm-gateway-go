@@ -128,6 +128,9 @@ func mergeOverrides(base, child AliasOverrides) AliasOverrides {
 		if co.NumPredict != 0 {
 			bo.NumPredict = co.NumPredict
 		}
+		if co.UseMmap != nil {
+			bo.UseMmap = co.UseMmap
+		}
 	}
 	return base
 }

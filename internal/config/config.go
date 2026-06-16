@@ -75,7 +75,8 @@ type OllamaOptions struct {
 	TopP           float64 `json:"top_p"`
 	TopK           int     `json:"top_k"`
 	RepeatPenalty  float64 `json:"repeat_penalty"`
-	NumPredict     int     `json:"num_predict"`
+	NumPredict     int  `json:"num_predict"`
+	UseMmap        *bool `json:"use_mmap,omitempty"`
 }
 
 // ModelsConfig controls model exposure and aliases.

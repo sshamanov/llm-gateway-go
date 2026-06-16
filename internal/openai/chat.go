@@ -394,7 +394,8 @@ func buildOllamaRequest(
 		if alias.Overrides.Options != nil {
 			opts := alias.Overrides.Options
 			if opts.Temperature != 0 || opts.TopP != 0 || opts.TopK != 0 ||
-				opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 {
+				opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 ||
+				opts.UseMmap != nil {
 				aliasOpts := &ollama.ChatOptions{
 					Temperature:   opts.Temperature,
 					TopP:          opts.TopP,
@@ -402,6 +403,7 @@ func buildOllamaRequest(
 					RepeatPenalty: opts.RepeatPenalty,
 					NumPredict:    opts.NumPredict,
 					NumCtx:        opts.NumCtx,
+					UseMmap:       opts.UseMmap,
 				}
 				// Merge: alias overwrites individual fields that are explicitly set,
 				// preserving fields set by client that alias didn't touch.
@@ -425,6 +427,9 @@ func buildOllamaRequest(
 					}
 					if opts.NumCtx != 0 {
 						result.Options.NumCtx = aliasOpts.NumCtx
+					}
+					if opts.UseMmap != nil {
+						result.Options.UseMmap = aliasOpts.UseMmap
 					}
 				}
 			}
