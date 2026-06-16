@@ -34,7 +34,8 @@ func SendChat(ctx context.Context, client *http.Client, baseURL string, req *Cha
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("send chat: unexpected status %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("send chat: unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
