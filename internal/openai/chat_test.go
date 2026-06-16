@@ -1310,3 +1310,60 @@ func TestBuildOllamaRequest_StopParsing_SingleString(t *testing.T) {
 		t.Errorf("expected stop[0] '\\n', got %q", result.Options.Stop[0])
 	}
 }
+
+func TestStripDataURLPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "png data URL",
+			input:    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgA",
+			expected: "iVBORw0KGgoAAAANSUhEUgA",
+		},
+		{
+			name:     "jpeg data URL",
+			input:    "data:image/jpeg;base64,/9j/4AAQSkZJRg",
+			expected: "/9j/4AAQSkZJRg",
+		},
+		{
+			name:     "raw base64 (no prefix)",
+			input:    "iVBORw0KGgoAAAANSUhEUgA",
+			expected: "iVBORw0KGgoAAAANSUhEUgA",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripDataURLPrefix(tt.input)
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestConvertContentParts_StripsDataURLPrefix(t *testing.T) {
+	parts := []openaiContentPart{
+		{Type: "text", Text: "Describe this image."},
+		{Type: "image_url", ImageURL: &openaiImageURL{URL: "data:image/png;base64,iVBORw0KGgo"}},
+	}
+	text, images, err := convertContentParts(parts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "Describe this image." {
+		t.Errorf("expected text %q, got %q", "Describe this image.", text)
+	}
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
+	}
+	if images[0] != "iVBORw0KGgo" {
+		t.Errorf("expected raw base64 %q, got %q", "iVBORw0KGgo", images[0])
+	}
+}

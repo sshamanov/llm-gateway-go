@@ -727,8 +727,11 @@ func TestSpoolBase64File_Valid(t *testing.T) {
 	if !strings.HasSuffix(filePath, ".png") {
 		t.Errorf("expected .png extension, got %q", filePath)
 	}
-	if base64Data != dataURL {
-		t.Errorf("expected base64Data to match input data URL")
+	if base64Data == "" {
+		t.Error("expected non-empty base64 data")
+	}
+	if strings.Contains(base64Data, "data:") {
+		t.Errorf("expected raw base64 without data URL prefix, got %q", base64Data)
 	}
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		t.Errorf("file was not created at %q", filePath)

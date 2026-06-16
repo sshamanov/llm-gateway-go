@@ -257,8 +257,8 @@ func spoolBase64File(fileData, filename, uploadDir string) (filePath string, bas
 		return "", "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	// Return the original data URL so the caller can use it in ChatMessage.Images.
-	return filePath, fileData, nil
+	// Return the raw base64 so the caller can use it in ChatMessage.Images directly.
+	return filePath, base64Payload, nil
 }
 
 // ---------------------------------------------------------------------------

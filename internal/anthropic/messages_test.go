@@ -786,9 +786,9 @@ func TestConvertInputMessages_ImageBlock(t *testing.T) {
 	if len(result[0].Images) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(result[0].Images))
 	}
-	expectedDataURL := "data:image/png;base64,iVBORw0KGgo="
-	if result[0].Images[0] != expectedDataURL {
-		t.Errorf("expected image data URL %q, got %q", expectedDataURL, result[0].Images[0])
+	expectedBase64 := "iVBORw0KGgo="
+	if result[0].Images[0] != expectedBase64 {
+		t.Errorf("expected raw base64 %q, got %q", expectedBase64, result[0].Images[0])
 	}
 }
 

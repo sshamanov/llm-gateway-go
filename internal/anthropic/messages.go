@@ -198,7 +198,7 @@ func convertContentBlocks(blocks []anthropicContentBlockSource) (text string, im
 			text += block.Text
 		case "image":
 			if block.Source != nil {
-				images = append(images, fmt.Sprintf("data:%s;base64,%s", block.Source.MediaType, block.Source.Data))
+				images = append(images, block.Source.Data)
 			}
 		default:
 			// For tool_use, tool_result, or any other block type: serialize to JSON

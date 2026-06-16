@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"llm-go-proxy/internal/backend"
@@ -306,6 +307,7 @@ func convertOpenAIChatMessages(msgs []chatRequestMessage) ([]ollama.ChatMessage,
 }
 
 // convertContentParts extracts text and images from an array of content parts.
+// Data URLs are stripped to raw base64 since Ollama expects raw base64 in the images field.
 func convertContentParts(parts []openaiContentPart) (text string, images []string, err error) {
 	for _, part := range parts {
 		switch part.Type {
@@ -313,11 +315,23 @@ func convertContentParts(parts []openaiContentPart) (text string, images []strin
 			text += part.Text
 		case "image_url":
 			if part.ImageURL != nil && part.ImageURL.URL != "" {
-				images = append(images, part.ImageURL.URL)
+				images = append(images, stripDataURLPrefix(part.ImageURL.URL))
 			}
 		}
 	}
 	return text, images, nil
+}
+
+// stripDataURLPrefix strips the "data:<mediatype>;base64," prefix from a data URL,
+// returning just the raw base64 content. Returns the original string if it doesn't
+// match the data URL pattern.
+func stripDataURLPrefix(url string) string {
+	const prefix = ";base64,"
+	idx := strings.Index(url, prefix)
+	if idx == -1 {
+		return url
+	}
+	return url[idx+len(prefix):]
 }
 
 // buildOllamaRequest assembles an Ollama ChatRequest by merging settings in order:
