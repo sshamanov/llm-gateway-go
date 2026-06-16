@@ -1024,7 +1024,7 @@ func TestBuildOllamaRequest_DefaultsOnly(t *testing.T) {
 	}
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hello"}}
 
-	result := buildOllamaRequest("test-model", messages, defaults, nil, req, config.PolicyConfig{})
+	result := buildOllamaRequest("test-model", messages, defaults, nil, req)
 
 	if result.Model != "test-model" {
 		t.Errorf("expected Model 'test-model', got %q", result.Model)
@@ -1074,7 +1074,7 @@ func TestBuildOllamaRequest_AliasThinkOverride(t *testing.T) {
 	req := &chatCompletionRequest{Model: "test-model"}
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hi"}}
 
-	result := buildOllamaRequest("test-model", messages, defaults, alias, req, config.PolicyConfig{})
+	result := buildOllamaRequest("test-model", messages, defaults, alias, req)
 
 	if result.Think == nil {
 		t.Fatal("expected non-nil Think")
@@ -1111,7 +1111,7 @@ func TestBuildOllamaRequest_AliasOptionsMerge(t *testing.T) {
 	req := &chatCompletionRequest{Model: "test-model"}
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hi"}}
 
-	result := buildOllamaRequest("test-model", messages, defaults, alias, req, config.PolicyConfig{})
+	result := buildOllamaRequest("test-model", messages, defaults, alias, req)
 
 	// Alias options should be applied (only Temperature set, TopP is 0 so not applied).
 	if result.Options == nil {
@@ -1149,9 +1149,7 @@ func TestBuildOllamaRequest_ClientOverridesAllowed(t *testing.T) {
 	}
 
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hi"}}
-	policy := config.PolicyConfig{AllowClientOverrideOptions: true}
-
-	result := buildOllamaRequest("test-model", messages, defaults, nil, req, policy)
+	result := buildOllamaRequest("test-model", messages, defaults, nil, req)
 
 	if result.Options == nil {
 		t.Fatal("expected non-nil Options from client overrides")
@@ -1174,7 +1172,7 @@ func TestBuildOllamaRequest_ClientOverridesAllowed(t *testing.T) {
 	}
 }
 
-func TestBuildOllamaRequest_ClientOverridesDisallowed(t *testing.T) {
+func TestBuildOllamaRequest_ClientOverridesAlwaysAllowed(t *testing.T) {
 	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
@@ -1189,19 +1187,24 @@ func TestBuildOllamaRequest_ClientOverridesDisallowed(t *testing.T) {
 	}
 
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hi"}}
-	policy := config.PolicyConfig{AllowClientOverrideOptions: false}
 
-	result := buildOllamaRequest("test-model", messages, defaults, nil, req, policy)
+	result := buildOllamaRequest("test-model", messages, defaults, nil, req)
 
-	// Client overrides should be ignored when disallowed — Options stays nil.
-	if result.Options != nil {
-		t.Errorf("expected nil Options (client overrides disallowed, no alias), got %+v", result.Options)
+	// Client overrides should always be applied (no policy gate).
+	if result.Options == nil {
+		t.Fatal("expected non-nil Options from client overrides")
+	}
+	if result.Options.NumPredict != 100 {
+		t.Errorf("expected NumPredict 100, got %d", result.Options.NumPredict)
+	}
+	if result.Options.Temperature != 0.5 {
+		t.Errorf("expected Temperature 0.5, got %f", result.Options.Temperature)
 	}
 }
 
 func TestBuildOllamaRequest_FullStack(t *testing.T) {
-	// Test all three layers: defaults -> alias -> client overrides.
-	// Options are no longer global; Temperature/TopP come from alias only.
+	// Test all three layers: defaults -> client -> alias.
+	// Alias wins over client when explicitly set.
 	thinkFalse := false
 	defaults := config.OllamaDefaultsConfig{
 		KeepAlive: "5m",
@@ -1233,9 +1236,8 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 	}
 
 	messages := []ollama.ChatMessage{{Role: "user", Content: "Hi"}}
-	policy := config.PolicyConfig{AllowClientOverrideOptions: true}
 
-	result := buildOllamaRequest("test-model", messages, defaults, alias, req, policy)
+	result := buildOllamaRequest("test-model", messages, defaults, alias, req)
 
 	// Alias KeepAlive override.
 	if result.KeepAlive != "15m" {
@@ -1250,19 +1252,19 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 		t.Error("expected Think to be true (alias override)")
 	}
 
-	// Temperature: alias(0.1) -> client(0.5) = 0.5 (client wins).
-	if result.Options.Temperature != 0.5 {
-		t.Errorf("expected Temperature 0.5 (client overrides alias), got %f", result.Options.Temperature)
+	// Temperature: client(0.5) -> alias(0.1) = 0.1 (alias wins).
+	if result.Options.Temperature != 0.1 {
+		t.Errorf("expected Temperature 0.1 (alias overrides client), got %f", result.Options.Temperature)
 	}
 
-	// TopP: alias(0.85) -> client(0.8) = 0.8 (client wins).
-	if result.Options.TopP != 0.8 {
-		t.Errorf("expected TopP 0.8, got %f", result.Options.TopP)
+	// TopP: client(0.8) -> alias(0.85) = 0.85 (alias wins).
+	if result.Options.TopP != 0.85 {
+		t.Errorf("expected TopP 0.85 (alias overrides client), got %f", result.Options.TopP)
 	}
 
-	// MaxTokens -> NumPredict.
+	// MaxTokens -> NumPredict: client sets 200, alias doesn't set NumPredict (0 = not set).
 	if result.Options.NumPredict != 200 {
-		t.Errorf("expected NumPredict 200, got %d", result.Options.NumPredict)
+		t.Errorf("expected NumPredict 200 (client, alias didn't override), got %d", result.Options.NumPredict)
 	}
 
 	// NumThread/NumCtx are not set by alias, defaults, or client — only backend sets them.
@@ -1275,13 +1277,12 @@ func TestBuildOllamaRequest_FullStack(t *testing.T) {
 }
 
 func TestBuildOllamaRequest_StopParsing_Array(t *testing.T) {
-	policy := config.PolicyConfig{AllowClientOverrideOptions: true}
 	req := &chatCompletionRequest{
 		Model: "test",
 		Stop:  json.RawMessage(`["\n", "user:"]`),
 	}
 
-	result := buildOllamaRequest("test", nil, config.OllamaDefaultsConfig{}, nil, req, policy)
+	result := buildOllamaRequest("test", nil, config.OllamaDefaultsConfig{}, nil, req)
 
 	if len(result.Options.Stop) != 2 {
 		t.Fatalf("expected 2 stop tokens, got %d: %v", len(result.Options.Stop), result.Options.Stop)
@@ -1295,13 +1296,12 @@ func TestBuildOllamaRequest_StopParsing_Array(t *testing.T) {
 }
 
 func TestBuildOllamaRequest_StopParsing_SingleString(t *testing.T) {
-	policy := config.PolicyConfig{AllowClientOverrideOptions: true}
 	req := &chatCompletionRequest{
 		Model: "test",
 		Stop:  json.RawMessage(`"\n"`),
 	}
 
-	result := buildOllamaRequest("test", nil, config.OllamaDefaultsConfig{}, nil, req, policy)
+	result := buildOllamaRequest("test", nil, config.OllamaDefaultsConfig{}, nil, req)
 
 	if len(result.Options.Stop) != 1 {
 		t.Fatalf("expected 1 stop token, got %d: %v", len(result.Options.Stop), result.Options.Stop)

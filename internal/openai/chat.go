@@ -142,7 +142,6 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			registry.OllamaDefaults(),
 			resolved.AliasConfig,
 			&chatReq,
-			registry.Policy(),
 		)
 
 		// Step 7b: If streaming, handle via streaming path.
@@ -323,15 +322,14 @@ func convertContentParts(parts []openaiContentPart) (text string, images []strin
 
 // buildOllamaRequest assembles an Ollama ChatRequest by merging settings in order:
 //  1. Global ollama_defaults
-//  2. Alias overrides (if the request used an alias)
-//  3. Client overrides (only if allow_client_override_options is true)
+//  2. Client overrides (harmless options always forwarded: max_tokens, temperature, top_p, stop)
+//  3. Alias overrides (wins over client when set)
 func buildOllamaRequest(
 	modelName string,
 	messages []ollama.ChatMessage,
 	defaults config.OllamaDefaultsConfig,
 	alias *config.AliasConfig,
 	req *chatCompletionRequest,
-	policy config.PolicyConfig,
 ) ollama.ChatRequest {
 	// Step 1: Start from global defaults (keep_alive, think only).
 	result := ollama.ChatRequest{
@@ -342,7 +340,36 @@ func buildOllamaRequest(
 		Think:     defaults.Think,
 	}
 
-	// Step 2: Alias overrides (think, temperature, top_p).
+	// Step 2: Client overrides (always forwarded — harmless per-request params).
+	if req.MaxTokens > 0 {
+		if result.Options == nil {
+			result.Options = &ollama.ChatOptions{}
+		}
+		result.Options.NumPredict = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		if result.Options == nil {
+			result.Options = &ollama.ChatOptions{}
+		}
+		result.Options.Temperature = *req.Temperature
+	}
+	if req.TopP != nil {
+		if result.Options == nil {
+			result.Options = &ollama.ChatOptions{}
+		}
+		result.Options.TopP = *req.TopP
+	}
+	if req.Stop != nil {
+		stops := parseStopField(req.Stop)
+		if len(stops) > 0 {
+			if result.Options == nil {
+				result.Options = &ollama.ChatOptions{}
+			}
+			result.Options.Stop = stops
+		}
+	}
+
+	// Step 3: Alias overrides (wins over client when explicitly set).
 	if alias != nil {
 		if alias.Overrides.Think != nil {
 			result.Think = alias.Overrides.Think
@@ -354,7 +381,7 @@ func buildOllamaRequest(
 			opts := alias.Overrides.Options
 			if opts.Temperature != 0 || opts.TopP != 0 || opts.TopK != 0 ||
 				opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 {
-				result.Options = &ollama.ChatOptions{
+				aliasOpts := &ollama.ChatOptions{
 					Temperature:   opts.Temperature,
 					TopP:          opts.TopP,
 					TopK:          opts.TopK,
@@ -362,37 +389,30 @@ func buildOllamaRequest(
 					NumPredict:    opts.NumPredict,
 					NumCtx:        opts.NumCtx,
 				}
-			}
-		}
-	}
-
-	// Step 3: Client overrides (only if allowed by policy).
-	if policy.AllowClientOverrideOptions {
-		if req.MaxTokens > 0 {
-			if result.Options == nil {
-				result.Options = &ollama.ChatOptions{}
-			}
-			result.Options.NumPredict = req.MaxTokens
-		}
-		if req.Temperature != nil {
-			if result.Options == nil {
-				result.Options = &ollama.ChatOptions{}
-			}
-			result.Options.Temperature = *req.Temperature
-		}
-		if req.TopP != nil {
-			if result.Options == nil {
-				result.Options = &ollama.ChatOptions{}
-			}
-			result.Options.TopP = *req.TopP
-		}
-		if req.Stop != nil {
-			stops := parseStopField(req.Stop)
-			if len(stops) > 0 {
+				// Merge: alias overwrites individual fields that are explicitly set,
+				// preserving fields set by client that alias didn't touch.
 				if result.Options == nil {
-					result.Options = &ollama.ChatOptions{}
+					result.Options = aliasOpts
+				} else {
+					if opts.Temperature != 0 {
+						result.Options.Temperature = aliasOpts.Temperature
+					}
+					if opts.TopP != 0 {
+						result.Options.TopP = aliasOpts.TopP
+					}
+					if opts.TopK != 0 {
+						result.Options.TopK = aliasOpts.TopK
+					}
+					if opts.RepeatPenalty != 0 {
+						result.Options.RepeatPenalty = aliasOpts.RepeatPenalty
+					}
+					if opts.NumPredict != 0 {
+						result.Options.NumPredict = aliasOpts.NumPredict
+					}
+					if opts.NumCtx != 0 {
+						result.Options.NumCtx = aliasOpts.NumCtx
+					}
 				}
-				result.Options.Stop = stops
 			}
 		}
 	}
