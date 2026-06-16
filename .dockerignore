@@ -6,3 +6,5 @@ dist/
 .gitattributes
 .gitignore
 .gitmessage
+config.json
+data/

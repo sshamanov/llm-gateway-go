@@ -23,6 +23,8 @@ vendor/
 
 # Secrets
 .env
+config.json
+data/config/
 
 # OS
 .DS_Store
