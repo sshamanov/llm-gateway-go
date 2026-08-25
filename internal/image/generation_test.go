@@ -50,7 +50,7 @@ func TestSendGeneration_Success(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{
+    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
         Prompt: "a cat",
         N:      1,
         Size:   "1024x1024",
@@ -101,7 +101,7 @@ func TestSendGeneration_MultipleImages(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{
+    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
         Prompt: "two dogs",
         N:      2,
     })
@@ -134,7 +134,7 @@ func TestSendGeneration_Error(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -156,7 +156,7 @@ func TestSendGeneration_ErrorWithoutBody(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -174,7 +174,7 @@ func TestSendGeneration_InvalidJSON(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -186,7 +186,7 @@ func TestSendGeneration_Unreachable(t *testing.T) {
     }))
     server.Close()
 
-    _, err := SendGeneration(http.DefaultClient, server.URL, &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(http.DefaultClient, server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -209,7 +209,7 @@ func TestSendGeneration_TrailingSlash(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL+"/", &GenerationRequest{Prompt: "test"})
+    result, err := SendGeneration(server.Client(), server.URL+"/", "", &GenerationRequest{Prompt: "test"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -225,6 +225,44 @@ func TestSendGeneration_TrailingSlash(t *testing.T) {
     }
     if result.Data[0].URL != "https://example.com/image.png" {
         t.Errorf("expected URL 'https://example.com/image.png', got %q", result.Data[0].URL)
+    }
+}
+
+func TestSendGeneration_SetsAuthHeader(t *testing.T) {
+    var gotAuth string
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        gotAuth = r.Header.Get("Authorization")
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(GenerationResponse{Data: []GenerationData{}})
+    }))
+    defer server.Close()
+
+    _, err := SendGeneration(server.Client(), server.URL, "sk-test-key", &GenerationRequest{Prompt: "test"})
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+    if gotAuth != "Bearer sk-test-key" {
+        t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sk-test-key")
+    }
+}
+
+func TestSendGeneration_EmptyKeyOmitsAuthHeader(t *testing.T) {
+    var gotAuth string
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        gotAuth = r.Header.Get("Authorization")
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(GenerationResponse{Data: []GenerationData{}})
+    }))
+    defer server.Close()
+
+    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+    if gotAuth != "" {
+        t.Errorf("Authorization = %q, want empty", gotAuth)
     }
 }
 
@@ -245,7 +283,7 @@ func TestSendGeneration_B64JSON(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, &GenerationRequest{
+    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
         Prompt:         "test",
         ResponseFormat: "b64_json",
     })

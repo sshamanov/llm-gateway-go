@@ -41,22 +41,26 @@ type OllamaBackendConfig struct {
 }
 
 // ImageBackendConfig describes a single image-generation backend.
+// APIKey, when set, is sent as "Authorization: Bearer <key>" on backend requests.
 type ImageBackendConfig struct {
 	ID                   string `json:"id"`
 	Type                 string `json:"type"`
 	URL                  string `json:"url"`
 	Host                 string `json:"host"`
 	MaxConcurrentRequests int    `json:"max_concurrent_requests"`
+	APIKey               string `json:"api_key,omitempty"`
 	Enabled              bool   `json:"enabled"`
 }
 
 // AudioBackendConfig describes a single audio backend.
+// APIKey, when set, is sent as "Authorization: Bearer <key>" on backend requests.
 type AudioBackendConfig struct {
 	ID                   string `json:"id"`
 	Type                 string `json:"type"`
 	URL                  string `json:"url"`
 	Host                 string `json:"host"`
 	MaxConcurrentRequests int    `json:"max_concurrent_requests"`
+	APIKey               string `json:"api_key,omitempty"`
 	Enabled              bool   `json:"enabled"`
 }
 

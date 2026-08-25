@@ -43,8 +43,9 @@ type GenerationError struct {
 
 // SendGeneration POSTs a generation request to an image backend and returns the
 // response. baseURL should be the root URL (e.g. "http://127.0.0.1:8080/v1").
-// The request is sent to {baseURL}/images/generations.
-func SendGeneration(client *http.Client, baseURL string, req *GenerationRequest) (*GenerationResponse, error) {
+// The request is sent to {baseURL}/images/generations. If apiKey is non-empty,
+// the request carries "Authorization: Bearer <apiKey>".
+func SendGeneration(client *http.Client, baseURL, apiKey string, req *GenerationRequest) (*GenerationResponse, error) {
     body, err := json.Marshal(req)
     if err != nil {
         return nil, fmt.Errorf("image gen: marshal request: %w", err)
@@ -56,6 +57,9 @@ func SendGeneration(client *http.Client, baseURL string, req *GenerationRequest)
         return nil, fmt.Errorf("image gen: create request: %w", err)
     }
     httpReq.Header.Set("Content-Type", "application/json")
+    if apiKey != "" {
+        httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+    }
 
     resp, err := client.Do(httpReq)
     if err != nil {

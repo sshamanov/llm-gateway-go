@@ -145,7 +145,7 @@ func ImagesGenerationsHandler(
 		}
 
 		// Step 9: Call image.SendGeneration.
-		genResp, err := image.SendGeneration(http.DefaultClient, selectedBackend.URL, genReq)
+		genResp, err := image.SendGeneration(http.DefaultClient, selectedBackend.URL, selectedBackend.APIKey, genReq)
 		if err != nil {
 			if logger != nil {
 				logger.Error("image generation failed",
