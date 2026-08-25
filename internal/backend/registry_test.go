@@ -280,6 +280,65 @@ func TestRegistry_Stop(t *testing.T) {
 	}
 }
 
+func newDiscardTestLogger() *logging.Logger {
+	logger := logging.NewLogger(logging.LevelDebug, "test")
+	logger.SetOutput(io.Discard, io.Discard)
+	return logger
+}
+
+func TestExpireStaleModels_Expires(t *testing.T) {
+	bs := &BackendState{
+		Config:          config.OllamaBackendConfig{ID: "b1"},
+		AvailableModels: []string{"model-a:latest"},
+	}
+	bs.lastTagsOK = time.Now().Add(-6 * time.Minute)
+
+	bs.expireStaleModels(newDiscardTestLogger(), "b1", modelStaleness)
+
+	if bs.AvailableModels != nil {
+		t.Errorf("expected AvailableModels to be cleared, got %v", bs.AvailableModels)
+	}
+}
+
+func TestExpireStaleModels_KeepsFresh(t *testing.T) {
+	bs := &BackendState{
+		Config:          config.OllamaBackendConfig{ID: "b1"},
+		AvailableModels: []string{"model-a:latest"},
+	}
+	bs.lastTagsOK = time.Now().Add(-time.Minute)
+
+	bs.expireStaleModels(newDiscardTestLogger(), "b1", modelStaleness)
+
+	if len(bs.AvailableModels) != 1 || bs.AvailableModels[0] != "model-a:latest" {
+		t.Errorf("expected models retained, got %v", bs.AvailableModels)
+	}
+}
+
+func TestExpireStaleModels_NeverRefreshedIsNoop(t *testing.T) {
+	bs := &BackendState{
+		Config:          config.OllamaBackendConfig{ID: "b1"},
+		AvailableModels: []string{"model-a:latest"},
+	}
+	// lastTagsOK zero value: never polled successfully, nothing to expire.
+
+	bs.expireStaleModels(newDiscardTestLogger(), "b1", modelStaleness)
+
+	if len(bs.AvailableModels) != 1 {
+		t.Errorf("expected models untouched before first successful poll, got %v", bs.AvailableModels)
+	}
+}
+
+func TestExpireStaleModels_AlreadyEmptyIsNoop(t *testing.T) {
+	bs := &BackendState{Config: config.OllamaBackendConfig{ID: "b1"}}
+	bs.lastTagsOK = time.Now().Add(-6 * time.Minute)
+
+	bs.expireStaleModels(newDiscardTestLogger(), "b1", modelStaleness)
+
+	if bs.AvailableModels != nil {
+		t.Errorf("expected nil AvailableModels, got %v", bs.AvailableModels)
+	}
+}
+
 func TestRegistry_NilSafe(t *testing.T) {
 	var reg *Registry
 

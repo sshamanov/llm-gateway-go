@@ -89,6 +89,24 @@ func run() error {
 	sched.Start()
 	defer sched.Stop()
 
+	// Prune learned per-model stats for models that no longer exist on any
+	// backend (e.g. removed from Ollama). Rides a 1-minute ticker — no extra
+	// polling of backends. Stops when the proxy shuts down.
+	statsPruneDone := make(chan struct{})
+	defer close(statsPruneDone)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				pruneModelStats(schedStats, registry.BackendSnapshots())
+			case <-statsPruneDone:
+				return
+			}
+		}
+	}()
+
 	// Document processing preparation queue.
 	prepareQueue := documents.NewPrepareQueue(cfg.Documents.PreparationWorkers)
 	prepareQueue.Start()
@@ -152,6 +170,22 @@ func run() error {
 
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// pruneModelStats drops learned per-model stats rows for models that no longer
+// appear in any backend's advertised model list. This keeps the /debug UI free
+// of stale performance rows after a model is removed from Ollama.
+func pruneModelStats(stats *scheduler.StatsTracker, snapshots []backend.BackendSnapshot) {
+	valid := make(map[scheduler.BackendModelKey]struct{})
+	for _, snap := range snapshots {
+		for _, model := range snap.AvailableModels {
+			valid[scheduler.BackendModelKey{BackendID: snap.ID, ModelName: model}] = struct{}{}
+		}
+	}
+	stats.Prune(func(key scheduler.BackendModelKey) bool {
+		_, ok := valid[key]
+		return ok
+	})
 }
 
 // collectBackendHosts returns deduplicated host IDs from all configured backends.

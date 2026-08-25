@@ -127,6 +127,20 @@ func (st *StatsTracker) GetConsecutiveFailures(key BackendModelKey) int {
 	return s.ConsecutiveFailures
 }
 
+// Prune removes stats rows for keys for which keep returns false. It is used to
+// drop learned stats for models that no longer exist on their backend (e.g.
+// removed from Ollama), so the /debug UI stops showing stale per-model rows.
+func (st *StatsTracker) Prune(keep func(BackendModelKey) bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	for key := range st.stats {
+		if !keep(key) {
+			delete(st.stats, key)
+		}
+	}
+}
+
 // SnapshotAll returns a copy of all stats, safe for external reads.
 func (st *StatsTracker) SnapshotAll() map[BackendModelKey]BackendModelStats {
 	st.mu.RLock()

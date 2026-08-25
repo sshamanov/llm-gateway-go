@@ -12,6 +12,13 @@ import (
 	"llm-go-proxy/internal/ollama"
 )
 
+// modelStaleness is how long a backend's model list may go unrefreshed before
+// its advertised models are treated as stale and dropped from the proxy list.
+// It bounds how long a model removed from Ollama can linger after the backend
+// becomes unreachable. The check rides the existing /api/tags ticker — no extra
+// polling is added.
+const modelStaleness = 5 * time.Minute
+
 // BackendState holds the runtime state for a single Ollama backend.
 // Fields are protected by the embedded RWMutex for concurrent access from
 // poll goroutines and HTTP handler goroutines.
@@ -20,6 +27,7 @@ type BackendState struct {
 	Health          HealthState
 	AvailableModels []string
 	LoadedModels    []string
+	lastTagsOK      time.Time // last successful /api/tags poll, for staleness expiry
 	mu              sync.RWMutex
 }
 
@@ -168,6 +176,32 @@ func (r *Registry) Policy() config.PolicyConfig {
 	return r.policy
 }
 
+// expireStaleModels drops a backend's advertised models once they have not been
+// refreshed by a successful /api/tags poll for longer than staleness. This makes
+// a model removed from Ollama disappear from the proxy list even when the backend
+// was unreachable at removal time (e.g. it went down first). The models reappear
+// on the next successful poll. No extra polling is performed — the check rides
+// the existing tags ticker, so removed models vanish within at most ~staleness.
+func (b *BackendState) expireStaleModels(logger *logging.Logger, backendID string, staleness time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.lastTagsOK.IsZero() {
+		return
+	}
+	if time.Since(b.lastTagsOK) < staleness {
+		return
+	}
+	if len(b.AvailableModels) == 0 {
+		return
+	}
+	b.AvailableModels = nil
+	logger.Info("backend models expired (no successful tags poll within window)",
+		logging.String("backend_id", backendID),
+		logging.Duration("staleness", staleness),
+	)
+}
+
 // pollBackend runs the polling loop for a single backend. It performs immediate
 // initial polls for both /api/tags and /api/ps, then continues on tickers until
 // the registry context is cancelled.
@@ -187,12 +221,14 @@ func (r *Registry) pollBackend(backend *BackendState) {
 				logging.String("error", err.Error()),
 			)
 			backend.Health.SetUnhealthy(err)
+			backend.expireStaleModels(r.logger, backend.Config.ID, modelStaleness)
 			return
 		}
 		names := ModelNamesFromTags(tags)
 
 		backend.mu.Lock()
 		backend.AvailableModels = names
+		backend.lastTagsOK = time.Now()
 		backend.mu.Unlock()
 
 		backend.Health.SetHealthy(time.Now())

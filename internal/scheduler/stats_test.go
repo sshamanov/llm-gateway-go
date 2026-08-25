@@ -172,6 +172,36 @@ func TestSnapshotAll(t *testing.T) {
 	}
 }
 
+func TestPrune(t *testing.T) {
+	st := NewStatsTracker()
+	keepKey := BackendModelKey{BackendID: "b1", ModelName: "model-a:latest"}
+	dropKey := BackendModelKey{BackendID: "b1", ModelName: "model-gone:latest"}
+	otherBackend := BackendModelKey{BackendID: "b2", ModelName: "model-a:latest"}
+
+	st.RecordSuccess(keepKey, 100.0, 0.5)
+	st.RecordSuccess(dropKey, 200.0, 0.8)
+	st.RecordSuccess(otherBackend, 300.0, 1.0)
+
+	// Keep only rows matching b1/model-a:latest.
+	keep := func(k BackendModelKey) bool {
+		return k.BackendID == "b1" && k.ModelName == "model-a:latest"
+	}
+	st.Prune(keep)
+
+	if got := st.GetSamples(keepKey); got != 1 {
+		t.Errorf("kept key samples: got %d, want 1", got)
+	}
+	if got := st.GetSamples(dropKey); got != 0 {
+		t.Errorf("dropped key samples: got %d, want 0 (row should be pruned)", got)
+	}
+	if got := st.GetSamples(otherBackend); got != 0 {
+		t.Errorf("other-backend key samples: got %d, want 0 (row should be pruned)", got)
+	}
+	if got := len(st.SnapshotAll()); got != 1 {
+		t.Errorf("snapshot after prune has %d entries, want 1", got)
+	}
+}
+
 func TestConcurrentSafety(t *testing.T) {
 	st := NewStatsTracker()
 	var wg sync.WaitGroup
