@@ -42,7 +42,7 @@ func NewRouter(
 	if sched != nil {
 		mux.Handle("GET /debug/queue", DebugQueueHandler(logger, sched.Queue))
 		mux.Handle("GET /debug/scheduler", DebugSchedulerHandler(logger, sched))
-		mux.Handle("GET /debug/hosts", DebugHostsHandler(logger, sched.Scorer.Hosts))
+		mux.Handle("GET /debug/hosts", DebugHostsHandler(logger, sched.Scorer.Hosts, registry))
 	}
 	if cfg != nil {
 		mux.Handle("GET /debug/config", DebugConfigHandler(logger, cfg))

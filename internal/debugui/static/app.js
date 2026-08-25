@@ -64,7 +64,9 @@
       if (!data || !data.hosts) { el.innerHTML = '<p>No hosts</p>'; return; }
       let html = '<table><thead><tr><th>Host</th><th>Active</th><th>Capacity</th><th>Status</th></tr></thead><tbody>';
       for (const h of data.hosts) {
-        const status = h.active_jobs >= h.capacity ? 'full' : 'available';
+        // Server-provided status (accounts for backend health); fall back to
+        // capacity-based for older endpoints that omit it.
+        const status = h.status || (h.active_jobs >= h.capacity ? 'full' : 'available');
         html += `<tr>
           <td>${h.host_id}</td>
           <td>${h.active_jobs}</td>
