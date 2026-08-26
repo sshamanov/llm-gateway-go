@@ -1587,21 +1587,11 @@ func TestChatCompletions_Streaming_ToolCall(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
-			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
-				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
-				Message: ollama.ChatMessage{
-					Role:    "assistant",
-					Content: "",
-					ToolCalls: []ollama.ChatToolCall{
-						{Function: ollama.ChatToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"location":"SF"}`)}},
-					},
-				},
-				Done:            true,
-				DoneReason:      "stop",
-				PromptEvalCount: 10,
-				EvalCount:       5,
-			})
+			// Ollama streams tool calls in their own chunk, then a separate done
+			// chunk — the finish_reason on the final chunk must still be tool_calls.
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			fmt.Fprintf(w, `{"model":"qwen:30b","message":{"role":"assistant","tool_calls":[{"function":{"name":"get_weather","arguments":{"location":"SF"}}}]},"done":false}`+"\n")
+			fmt.Fprintf(w, `{"model":"qwen:30b","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":5}`+"\n")
 			return
 		}
 		if strings.Contains(r.URL.Path, "/api/tags") {

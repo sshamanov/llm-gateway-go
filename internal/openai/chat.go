@@ -652,6 +652,7 @@ func handleStreamChatCompletion(
 	chatID := generateChatID()
 	created := time.Now().Unix()
 	firstChunk := true
+	sawToolCalls := false
 
 	// Read chunks from the scheduler's stream channel.
 	for chunk := range job.StreamCh {
@@ -677,6 +678,9 @@ func handleStreamChatCompletion(
 		role := ""
 		content := resp.Message.Content
 		toolCalls := mapSSEToolCalls(resp.Message.ToolCalls)
+		if len(toolCalls) > 0 {
+			sawToolCalls = true
+		}
 
 		// First chunk with content or tool calls gets the role delta too.
 		if firstChunk && (content != "" || len(toolCalls) > 0) {
@@ -684,12 +688,14 @@ func handleStreamChatCompletion(
 			firstChunk = false
 		}
 
-		// Build finish reason and usage for final chunk.
+		// Build finish reason and usage for final chunk. Ollama sends tool calls
+		// in their own chunk, so track them across the stream for the final
+		// finish_reason.
 		finishReason := ""
 		var usage *sseUsage
 		if resp.Done {
 			finishReason = mapFinishReason(resp.DoneReason)
-			if len(toolCalls) > 0 {
+			if sawToolCalls {
 				finishReason = "tool_calls"
 			}
 			usage = &sseUsage{

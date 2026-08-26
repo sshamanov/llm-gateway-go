@@ -42,3 +42,5 @@ Last updated: 2026-08-26
 
 ## Live Stream
 
+- Live E2E against qwen3.6:35b (backend 5950): tool calling confirmed on all three APIs, non-streaming + streaming. Found + fixed streaming bug: Chat Completions finish_reason was "stop" on tool-call streams (Ollama sends tool_calls in a separate chunk from done); now "tool_calls" via stream-level tracking. Test updated to model real chunking.
+
