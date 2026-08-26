@@ -35,12 +35,19 @@ type responsesRequest struct {
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Temperature     *float64        `json:"temperature,omitempty"`
 	TopP            *float64        `json:"top_p,omitempty"`
+	Tools           json.RawMessage `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 }
 
 // responseInputItem is a single item in the Responses API input array.
 type responseInputItem struct {
-	Role    string                 `json:"role"`
-	Content []responseContentBlock `json:"content"`
+	Role      string                 `json:"role"`
+	Content   []responseContentBlock `json:"content,omitempty"`
+	Type      string                 `json:"type,omitempty"`
+	CallID    string                 `json:"call_id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Arguments string                 `json:"arguments,omitempty"`
+	Output    string                 `json:"output,omitempty"`
 }
 
 // responseContentBlock is a content block within a responseInputItem.
@@ -65,12 +72,17 @@ type responsesResponse struct {
 	Usage   responsesUsage    `json:"usage"`
 }
 
-// responsesOutput is a single output item (message) in the Responses API response.
+// responsesOutput is a single output item in the Responses API response. It is
+// either a message (role + content) or a function_call (call_id + name + arguments).
 type responsesOutput struct {
-	Type    string                   `json:"type"`
-	ID      string                   `json:"id"`
-	Role    string                   `json:"role"`
-	Content []responsesOutputContent `json:"content"`
+	Type      string                   `json:"type"`
+	ID        string                   `json:"id"`
+	Role      string                   `json:"role,omitempty"`
+	Content   []responsesOutputContent `json:"content,omitempty"`
+	CallID    string                   `json:"call_id,omitempty"`
+	Name      string                   `json:"name,omitempty"`
+	Arguments string                   `json:"arguments,omitempty"`
+	Status    string                   `json:"status,omitempty"`
 }
 
 // responsesOutputContent is a content block within a responsesOutput.
@@ -141,6 +153,30 @@ func convertInput(input json.RawMessage, uploadDir string) ([]ollama.ChatMessage
 	meta := &responsesFileMeta{}
 
 	for _, item := range items {
+		switch item.Type {
+		case "function_call":
+			// An assistant tool invocation: arguments is a JSON string in the
+			// Responses API, decoded to an object for Ollama. The call id is
+			// dropped (Ollama does not carry it).
+			args := json.RawMessage(`{}`)
+			if raw := []byte(item.Arguments); len(raw) > 0 && raw[0] == '{' && json.Valid(raw) {
+				args = raw
+			}
+			messages = append(messages, ollama.ChatMessage{
+				Role: "assistant",
+				ToolCalls: []ollama.ChatToolCall{
+					{Function: ollama.ChatToolCallFunction{Name: item.Name, Arguments: args}},
+				},
+			})
+			continue
+		case "function_call_output":
+			messages = append(messages, ollama.ChatMessage{
+				Role:    "tool",
+				Content: item.Output,
+			})
+			continue
+		}
+
 		var sb strings.Builder
 		var images []string
 
@@ -308,12 +344,27 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 		// Step 6: Convert instructions to system message.
 		messages = convertInstructions(req.Instructions, messages)
 
-		// Step 7: Build merged options.
+		// Step 7: Build merged options (client first, alias wins).
 		defaults := registry.OllamaDefaults()
 		keepAlive := defaults.KeepAlive
 		think := defaults.Think
 		var options *ollama.ChatOptions
 
+		// Client overrides (always forwarded — harmless per-request params).
+		if req.MaxOutputTokens > 0 {
+			options = ensureChatOptions(options)
+			options.NumPredict = req.MaxOutputTokens
+		}
+		if req.Temperature != nil {
+			options = ensureChatOptions(options)
+			options.Temperature = *req.Temperature
+		}
+		if req.TopP != nil {
+			options = ensureChatOptions(options)
+			options.TopP = *req.TopP
+		}
+
+		// Alias overrides (wins over client when explicitly set).
 		if resolved.AliasConfig != nil {
 			alias := resolved.AliasConfig
 			if alias.Overrides.Think != nil {
@@ -324,46 +375,44 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			}
 			if alias.Overrides.Options != nil {
 				opts := alias.Overrides.Options
-				if opts.Temperature != 0 || opts.TopP != 0 || opts.TopK != 0 ||
-					opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 ||
-					opts.UseMmap != nil {
-					options = &ollama.ChatOptions{
-						Temperature:   opts.Temperature,
-						TopP:          opts.TopP,
-						TopK:          opts.TopK,
-						RepeatPenalty: opts.RepeatPenalty,
-						NumPredict:    opts.NumPredict,
-						NumCtx:        opts.NumCtx,
-						UseMmap:       opts.UseMmap,
-					}
+				if opts.NumThread != 0 {
+					options = ensureChatOptions(options)
+					options.NumThread = opts.NumThread
 				}
-			}
-		}
-
-		if registry.Policy().AllowClientOverrideOptions {
-			if req.MaxOutputTokens > 0 {
-				if options == nil {
-					options = &ollama.ChatOptions{}
+				if opts.NumCtx != 0 {
+					options = ensureChatOptions(options)
+					options.NumCtx = opts.NumCtx
 				}
-				options.NumPredict = req.MaxOutputTokens
-			}
-			if req.Temperature != nil {
-				if options == nil {
-					options = &ollama.ChatOptions{}
+				if opts.Temperature != 0 {
+					options = ensureChatOptions(options)
+					options.Temperature = opts.Temperature
 				}
-				options.Temperature = *req.Temperature
-			}
-			if req.TopP != nil {
-				if options == nil {
-					options = &ollama.ChatOptions{}
+				if opts.TopP != 0 {
+					options = ensureChatOptions(options)
+					options.TopP = opts.TopP
 				}
-				options.TopP = *req.TopP
+				if opts.TopK != 0 {
+					options = ensureChatOptions(options)
+					options.TopK = opts.TopK
+				}
+				if opts.RepeatPenalty != 0 {
+					options = ensureChatOptions(options)
+					options.RepeatPenalty = opts.RepeatPenalty
+				}
+				if opts.NumPredict != 0 {
+					options = ensureChatOptions(options)
+					options.NumPredict = opts.NumPredict
+				}
+				if opts.UseMmap != nil {
+					options = ensureChatOptions(options)
+					options.UseMmap = opts.UseMmap
+				}
 			}
 		}
 
 		// Step 8: If streaming, branch to streaming handler.
 		if req.Stream != nil && *req.Stream {
-			handleStreamResponses(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, think, options)
+			handleStreamResponses(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, think, options, req.Tools)
 			return
 		}
 
@@ -378,10 +427,11 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 		jobCtx, cancelJob := context.WithCancel(r.Context())
 		defer cancelJob()
 
+		kind := chatJobKind(req.Tools)
 		job := &scheduler.Job{
 			ID:             jobID,
-			Kind:           scheduler.KindChat,
-			Priority:       scheduler.KindChat.Priority(),
+			Kind:           kind,
+			Priority:       kind.Priority(),
 			CreatedAt:      time.Now(),
 			RequestedModel: req.Model,
 			Candidates:     resolved.Candidates,
@@ -390,6 +440,7 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 			AliasConfig:    resolved.AliasConfig,
 			Messages:       messages,
 			Options:        options,
+			Tools:          req.Tools,
 			ResultChan:     make(chan scheduler.JobResult, 1),
 			JobCtx:         jobCtx,
 		}
@@ -435,12 +486,26 @@ func ResponsesHandler(logger *logging.Logger, registry *backend.Registry, sched 
 // responsesResponse.
 func mapResponsesResponse(ollamaResp *ollama.ChatResponse, requestedModel string) responsesResponse {
 	respID := generateResponseID()
-	return responsesResponse{
-		ID:      respID,
-		Object:  "response",
-		Created: time.Now().Unix(),
-		Model:   requestedModel,
-		Output: []responsesOutput{
+
+	output := make([]responsesOutput, 0, 1)
+	for _, tc := range ollamaResp.Message.ToolCalls {
+		args := string(tc.Function.Arguments)
+		if args == "" || args == "null" {
+			args = "{}"
+		}
+		callID := newToolCallID()
+		output = append(output, responsesOutput{
+			Type:      "function_call",
+			ID:        callID,
+			CallID:    callID,
+			Name:      tc.Function.Name,
+			Arguments: args,
+			Status:    "completed",
+		})
+	}
+
+	if len(output) == 0 {
+		output = []responsesOutput{
 			{
 				Type: "message",
 				ID:   respID + "_item_0",
@@ -453,7 +518,15 @@ func mapResponsesResponse(ollamaResp *ollama.ChatResponse, requestedModel string
 					},
 				},
 			},
-		},
+		}
+	}
+
+	return responsesResponse{
+		ID:      respID,
+		Object:  "response",
+		Created: time.Now().Unix(),
+		Model:   requestedModel,
+		Output:  output,
 		Usage: responsesUsage{
 			InputTokens:  ollamaResp.PromptEvalCount,
 			OutputTokens: ollamaResp.EvalCount,
@@ -481,6 +554,7 @@ func handleStreamResponses(
 	keepAlive string,
 	think *bool,
 	options *ollama.ChatOptions,
+	tools json.RawMessage,
 ) {
 	// Step 1: Set SSE headers.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -505,10 +579,11 @@ func handleStreamResponses(
 
 	// Step 4: Create streaming job.
 	streamCh := make(chan *ollama.StreamChunk, 20)
+	kind := chatJobKind(tools)
 	job := &scheduler.Job{
 		ID:             jobID,
-		Kind:           scheduler.KindChat,
-		Priority:       scheduler.KindChat.Priority(),
+		Kind:           kind,
+		Priority:       kind.Priority(),
 		CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
@@ -518,6 +593,7 @@ func handleStreamResponses(
 		KeepAlive:      keepAlive,
 		Think:          think,
 		Options:        options,
+		Tools:          tools,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),
 		JobCtx:         streamCtx,
@@ -582,6 +658,54 @@ func handleStreamResponses(
 			}
 		}
 
+		// Write function_call output item events for chunks carrying tool_calls.
+		// Ollama delivers a complete tool call in a single chunk, so the whole
+		// item is emitted at once.
+		if toolCalls := resp.Message.ToolCalls; len(toolCalls) > 0 {
+			for i, tc := range toolCalls {
+				args := string(tc.Function.Arguments)
+				if args == "" || args == "null" {
+					args = "{}"
+				}
+				callID := newToolCallID()
+				item := responsesOutput{
+					Type:      "function_call",
+					ID:        callID,
+					CallID:    callID,
+					Name:      tc.Function.Name,
+					Arguments: args,
+					Status:    "completed",
+				}
+				if err := writeSSEResponseEvent(w, sseResponseEvent{
+					Type:        "response.output_item.added",
+					OutputIndex: i,
+					ItemID:      callID,
+					Item:        &item,
+				}); err != nil {
+					cancelStream()
+					return
+				}
+				if err := writeSSEResponseEvent(w, sseResponseEvent{
+					Type:        "response.function_call_arguments.delta",
+					OutputIndex: i,
+					ItemID:      callID,
+					Delta:       args,
+				}); err != nil {
+					cancelStream()
+					return
+				}
+				if err := writeSSEResponseEvent(w, sseResponseEvent{
+					Type:        "response.output_item.done",
+					OutputIndex: i,
+					ItemID:      callID,
+					Item:        &item,
+				}); err != nil {
+					cancelStream()
+					return
+				}
+			}
+		}
+
 		// Write done event for the final chunk.
 		if resp.Done {
 			fullResp := mapResponsesResponse(resp, requestedModel)
@@ -624,4 +748,12 @@ func generateResponseID() string {
 		return fmt.Sprintf("resp_%016x", time.Now().UnixNano())
 	}
 	return "resp_" + hex.EncodeToString(b)
+}
+
+// ensureChatOptions returns o if non-nil, otherwise a new zero ChatOptions.
+func ensureChatOptions(o *ollama.ChatOptions) *ollama.ChatOptions {
+	if o == nil {
+		return &ollama.ChatOptions{}
+	}
+	return o
 }

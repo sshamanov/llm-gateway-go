@@ -14,17 +14,25 @@ type sseContentBlockStart struct {
 	ContentBlock anthropicResponseBlock `json:"content_block"`
 }
 
-// sseContentBlockDelta carries a text delta for the current content block.
+// sseContentBlockDelta carries a delta for the current content block. Delta is a
+// raw JSON object — either a text_delta or an input_json_delta for tool_use.
 type sseContentBlockDelta struct {
-	Type  string             `json:"type"`  // "content_block_delta"
-	Index int                `json:"index"`
-	Delta anthropicTextDelta `json:"delta"`
+	Type  string          `json:"type"` // "content_block_delta"
+	Index int             `json:"index"`
+	Delta json.RawMessage `json:"delta"`
 }
 
 // anthropicTextDelta is the text delta within a content_block_delta event.
 type anthropicTextDelta struct {
 	Type string `json:"type"` // "text_delta"
 	Text string `json:"text"`
+}
+
+// anthropicToolUseDelta is the delta for tool_use blocks; partial_json carries
+// the JSON string of the tool input.
+type anthropicToolUseDelta struct {
+	Type        string `json:"type"` // "input_json_delta"
+	PartialJSON string `json:"partial_json"`
 }
 
 // sseContentBlockStop signals the end of a content block.

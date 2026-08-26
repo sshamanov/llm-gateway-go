@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -36,8 +37,23 @@ type chatCompletionRequest struct {
 
 // chatRequestMessage is a single message in the incoming request.
 type chatRequestMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role       string           `json:"role"`
+	Content    json.RawMessage  `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+// openAIToolCall is a function invocation in an OpenAI assistant message.
+type openAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIToolCallFunction `json:"function"`
+}
+
+// openAIToolCallFunction holds the function name and stringified arguments.
+type openAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // openaiContentPart represents a single block in an array-typed message content.
@@ -75,8 +91,22 @@ type chatChoice struct {
 
 // responseMessage is the assistant message in a completion choice.
 type responseMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string             `json:"role"`
+	Content   string             `json:"content"`
+	ToolCalls []responseToolCall `json:"tool_calls,omitempty"`
+}
+
+// responseToolCall is a function invocation in a chat completion response.
+type responseToolCall struct {
+	ID       string                   `json:"id"`
+	Type     string                   `json:"type"`
+	Function responseToolCallFunction `json:"function"`
+}
+
+// responseToolCallFunction holds the name and stringified arguments.
+type responseToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // chatUsage holds token usage statistics.
@@ -147,7 +177,7 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 
 		// Step 7b: If streaming, handle via streaming path.
 		if chatReq.Stream != nil && *chatReq.Stream {
-			handleStreamChatCompletion(w, r, logger, sched, chatReq.Model, resolved.Candidates, resolved.AliasConfig, messages, ollamaReq.KeepAlive, ollamaReq.Think, ollamaReq.Options)
+			handleStreamChatCompletion(w, r, logger, sched, chatReq.Model, resolved.Candidates, resolved.AliasConfig, messages, ollamaReq.KeepAlive, ollamaReq.Think, ollamaReq.Options, ollamaReq.Tools)
 			return
 		}
 
@@ -162,10 +192,11 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 		jobCtx, cancelJob := context.WithCancel(r.Context())
 		defer cancelJob()
 
+		kind := chatJobKind(ollamaReq.Tools)
 		job := &scheduler.Job{
 			ID:             jobID,
-			Kind:           scheduler.KindChat,
-			Priority:       scheduler.KindChat.Priority(),
+			Kind:           kind,
+			Priority:       kind.Priority(),
 			CreatedAt:      time.Now(),
 			RequestedModel: chatReq.Model,
 			Candidates:     resolved.Candidates,
@@ -174,6 +205,7 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 			KeepAlive:      ollamaReq.KeepAlive,
 			Think:          ollamaReq.Think,
 			Options:        ollamaReq.Options,
+			Tools:          ollamaReq.Tools,
 			ResultChan:     make(chan scheduler.JobResult, 1),
 			JobCtx:         jobCtx,
 		}
@@ -217,7 +249,15 @@ func ChatCompletionsHandler(logger *logging.Logger, registry *backend.Registry, 
 // mapChatResponse converts an Ollama ChatResponse to an OpenAI-compatible
 // chatCompletionResponse.
 func mapChatResponse(ollamaResp *ollama.ChatResponse, requestedModel string) chatCompletionResponse {
+	message := responseMessage{
+		Role:    "assistant",
+		Content: ollamaResp.Message.Content,
+	}
 	finishReason := mapFinishReason(ollamaResp.DoneReason)
+	if toolCalls := mapToolCalls(ollamaResp.Message.ToolCalls); len(toolCalls) > 0 {
+		message.ToolCalls = toolCalls
+		finishReason = "tool_calls"
+	}
 
 	return chatCompletionResponse{
 		ID:     generateChatID(),
@@ -226,11 +266,8 @@ func mapChatResponse(ollamaResp *ollama.ChatResponse, requestedModel string) cha
 		Model:  requestedModel,
 		Choices: []chatChoice{
 			{
-				Index: 0,
-				Message: responseMessage{
-					Role:    "assistant",
-					Content: ollamaResp.Message.Content,
-				},
+				Index:       0,
+				Message:     message,
 				FinishReason: finishReason,
 			},
 		},
@@ -240,6 +277,39 @@ func mapChatResponse(ollamaResp *ollama.ChatResponse, requestedModel string) cha
 			TotalTokens:      ollamaResp.PromptEvalCount + ollamaResp.EvalCount,
 		},
 	}
+}
+
+// newToolCallID creates a unique OpenAI-style tool call id using crypto/rand.
+func newToolCallID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("call_%016x", time.Now().UnixNano())
+	}
+	return "call_" + hex.EncodeToString(b)
+}
+
+// mapToolCalls converts Ollama tool_calls to the OpenAI shape: arguments (an
+// object) is stringified and an id + type are added.
+func mapToolCalls(calls []ollama.ChatToolCall) []responseToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]responseToolCall, 0, len(calls))
+	for _, c := range calls {
+		args := string(c.Function.Arguments)
+		if args == "" || args == "null" {
+			args = "{}"
+		}
+		out = append(out, responseToolCall{
+			ID:   newToolCallID(),
+			Type: "function",
+			Function: responseToolCallFunction{
+				Name:      c.Function.Name,
+				Arguments: args,
+			},
+		})
+	}
+	return out
 }
 
 // mapFinishReason maps Ollama done_reason values to OpenAI finish_reason values.
@@ -281,11 +351,13 @@ func writeJSONError(w http.ResponseWriter, status int, message, errType, code st
 func convertOpenAIChatMessages(msgs []chatRequestMessage) ([]ollama.ChatMessage, error) {
 	result := make([]ollama.ChatMessage, 0, len(msgs))
 	for _, msg := range msgs {
+		toolCalls := convertOpenAIToolCalls(msg.ToolCalls)
 		var contentStr string
 		if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
 			result = append(result, ollama.ChatMessage{
-				Role:    msg.Role,
-				Content: contentStr,
+				Role:      msg.Role,
+				Content:   contentStr,
+				ToolCalls: toolCalls,
 			})
 			continue
 		}
@@ -298,12 +370,36 @@ func convertOpenAIChatMessages(msgs []chatRequestMessage) ([]ollama.ChatMessage,
 			return nil, fmt.Errorf("convert message: %w", err)
 		}
 		result = append(result, ollama.ChatMessage{
-			Role:    msg.Role,
-			Content: text,
-			Images:  images,
+			Role:      msg.Role,
+			Content:   text,
+			Images:    images,
+			ToolCalls: toolCalls,
 		})
 	}
 	return result, nil
+}
+
+// convertOpenAIToolCalls converts OpenAI tool_calls to the Ollama shape:
+// arguments (a JSON string in OpenAI) is kept as a JSON object and the id/type
+// fields are dropped, since Ollama does not carry them.
+func convertOpenAIToolCalls(calls []openAIToolCall) []ollama.ChatToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]ollama.ChatToolCall, 0, len(calls))
+	for _, c := range calls {
+		args := json.RawMessage(`{}`)
+		if raw := []byte(c.Function.Arguments); len(raw) > 0 && raw[0] == '{' && json.Valid(raw) {
+			args = raw
+		}
+		out = append(out, ollama.ChatToolCall{
+			Function: ollama.ChatToolCallFunction{
+				Name:      c.Function.Name,
+				Arguments: args,
+			},
+		})
+	}
+	return out
 }
 
 // convertContentParts extracts text and images from an array of content parts.
@@ -352,6 +448,7 @@ func buildOllamaRequest(
 		Stream:    false,
 		KeepAlive: defaults.KeepAlive,
 		Think:     defaults.Think,
+		Tools:     req.Tools,
 	}
 
 	// Step 2: Client overrides (always forwarded — harmless per-request params).
@@ -455,6 +552,21 @@ func parseStopField(raw json.RawMessage) []string {
 	return nil
 }
 
+// hasTools reports whether a raw tools field carries any tool definitions.
+func hasTools(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte("[]"))
+}
+
+// chatJobKind returns the scheduler job kind for a chat request: tool requests
+// are prioritized as KindTool when the request carries tool definitions.
+func chatJobKind(tools json.RawMessage) scheduler.JobKind {
+	if hasTools(tools) {
+		return scheduler.KindTool
+	}
+	return scheduler.KindChat
+}
+
 // handleStreamChatCompletion processes a streaming chat completion request.
 // It creates a streaming Job, submits it to the scheduler, reads streaming
 // chunks from StreamCh, and writes SSE events to the response writer.
@@ -470,6 +582,7 @@ func handleStreamChatCompletion(
 	keepAlive string,
 	think *bool,
 	options *ollama.ChatOptions,
+	tools json.RawMessage,
 ) {
 	// Set SSE headers.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -495,10 +608,11 @@ func handleStreamChatCompletion(
 
 	// Create streaming job.
 	streamCh := make(chan *ollama.StreamChunk, 20)
+	kind := chatJobKind(tools)
 	job := &scheduler.Job{
 		ID:             jobID,
-		Kind:           scheduler.KindChat,
-		Priority:       scheduler.KindChat.Priority(),
+		Kind:           kind,
+		Priority:       kind.Priority(),
 		CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
@@ -508,6 +622,7 @@ func handleStreamChatCompletion(
 		KeepAlive:      keepAlive,
 		Think:          think,
 		Options:        options,
+		Tools:          tools,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),
 		JobCtx:         streamCtx,
@@ -561,9 +676,10 @@ func handleStreamChatCompletion(
 		// Determine delta content.
 		role := ""
 		content := resp.Message.Content
+		toolCalls := mapSSEToolCalls(resp.Message.ToolCalls)
 
-		// First chunk with content gets the role delta too.
-		if firstChunk && content != "" {
+		// First chunk with content or tool calls gets the role delta too.
+		if firstChunk && (content != "" || len(toolCalls) > 0) {
 			role = "assistant"
 			firstChunk = false
 		}
@@ -573,6 +689,9 @@ func handleStreamChatCompletion(
 		var usage *sseUsage
 		if resp.Done {
 			finishReason = mapFinishReason(resp.DoneReason)
+			if len(toolCalls) > 0 {
+				finishReason = "tool_calls"
+			}
 			usage = &sseUsage{
 				PromptTokens:     resp.PromptEvalCount,
 				CompletionTokens: resp.EvalCount,
@@ -581,7 +700,7 @@ func handleStreamChatCompletion(
 		}
 
 		// Write SSE chunk.
-		if err := writeSSEChatChunk(w, chatID, requestedModel, created, role, content, finishReason, usage); err != nil {
+		if err := writeSSEChatChunk(w, chatID, requestedModel, created, role, content, toolCalls, finishReason, usage); err != nil {
 			// Client probably disconnected — cancel the backend.
 			cancelStream()
 			return

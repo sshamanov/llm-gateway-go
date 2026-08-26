@@ -1090,3 +1090,210 @@ func TestResponses_Streaming_ClientDisconnect(t *testing.T) {
 		t.Error("expected backend request context to be cancelled on client disconnect")
 	}
 }
+
+func TestConvertInput_FunctionCall(t *testing.T) {
+	input := json.RawMessage(`[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"What's the weather?"}]},
+		{"type":"function_call","call_id":"fc_1","name":"get_weather","arguments":"{\"location\":\"SF\"}"},
+		{"type":"function_call_output","call_id":"fc_1","output":"22C"}
+	]`)
+
+	messages, meta, err := convertInput(input, t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta != nil {
+		meta.cleanup()
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(messages))
+	}
+	if messages[1].Role != "assistant" {
+		t.Errorf("expected function_call to map to assistant role, got %q", messages[1].Role)
+	}
+	if len(messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(messages[1].ToolCalls))
+	}
+	if messages[1].ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("expected function name get_weather, got %q", messages[1].ToolCalls[0].Function.Name)
+	}
+	if string(messages[1].ToolCalls[0].Function.Arguments) != `{"location":"SF"}` {
+		t.Errorf("expected arguments object, got %s", messages[1].ToolCalls[0].Function.Arguments)
+	}
+	if messages[2].Role != "tool" || messages[2].Content != "22C" {
+		t.Errorf("expected tool result message, got role=%q content=%q", messages[2].Role, messages[2].Content)
+	}
+}
+
+func TestResponses_ToolCall(t *testing.T) {
+	var capturedBody atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			body, _ := io.ReadAll(r.Body)
+			capturedBody.Store(string(body))
+			json.NewEncoder(w).Encode(ollama.ChatResponse{
+				Model: "qwen:30b",
+				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+				Message: ollama.ChatMessage{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: []ollama.ChatToolCall{
+						{Function: ollama.ChatToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"location":"SF"}`)}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 10,
+				EvalCount:       5,
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{Models: []ollama.TagsModel{{Name: "qwen:30b"}}})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: true,
+	}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ResponsesHandler(logger, reg, sched, t.TempDir())
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"qwen:30b","input":"What's the weather in SF?","tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d: %s", resp.StatusCode, raw)
+	}
+
+	sent := capturedBody.Load().(string)
+	if !strings.Contains(sent, `"tools"`) {
+		t.Errorf("expected tools in Ollama request, got: %s", sent)
+	}
+
+	var result responsesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Output) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(result.Output))
+	}
+	out := result.Output[0]
+	if out.Type != "function_call" {
+		t.Fatalf("expected output type function_call, got %q", out.Type)
+	}
+	if out.Name != "get_weather" {
+		t.Errorf("expected name get_weather, got %q", out.Name)
+	}
+	if out.Arguments != `{"location":"SF"}` {
+		t.Errorf("expected stringified arguments, got %q", out.Arguments)
+	}
+	if out.Status != "completed" {
+		t.Errorf("expected status completed, got %q", out.Status)
+	}
+}
+
+func TestResponses_Streaming_ToolCall(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			json.NewEncoder(w).Encode(ollama.ChatResponse{
+				Model: "qwen:30b",
+				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+				Message: ollama.ChatMessage{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: []ollama.ChatToolCall{
+						{Function: ollama.ChatToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"location":"SF"}`)}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 10,
+				EvalCount:       5,
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{Models: []ollama.TagsModel{{Name: "qwen:30b"}}})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{ExposeNativeOllamaModels: true}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ResponsesHandler(logger, reg, sched, t.TempDir())
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"qwen:30b","input":"What's the weather in SF?","stream":true,"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sse := string(respBody)
+
+	if !strings.Contains(sse, `"type":"response.output_item.added"`) {
+		t.Errorf("expected output_item.added event, got: %s", sse)
+	}
+	if !strings.Contains(sse, `"type":"function_call"`) {
+		t.Errorf("expected function_call item in SSE stream")
+	}
+	if !strings.Contains(sse, `"get_weather"`) {
+		t.Errorf("expected function name get_weather in SSE stream")
+	}
+	if !strings.Contains(sse, "[DONE]") {
+		t.Errorf("expected [DONE] marker")
+	}
+}

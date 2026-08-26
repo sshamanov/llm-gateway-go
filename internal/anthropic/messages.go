@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"llm-go-proxy/internal/backend"
@@ -136,16 +138,34 @@ func convertInputMessages(msgs []anthropicInputMessage) ([]ollama.ChatMessage, e
 			return nil, fmt.Errorf("convert input message: %w", err)
 		}
 
-		text, images, err := convertContentBlocks(blocks)
+		text, images, toolCalls, hasToolResult, err := convertContentBlocks(blocks)
 		if err != nil {
 			return nil, fmt.Errorf("convert input message: %w", err)
 		}
 
-		result = append(result, ollama.ChatMessage{
-			Role:    msg.Role,
-			Content: text,
-			Images:  images,
-		})
+		switch {
+		case len(toolCalls) > 0:
+			// Assistant tool invocations become Ollama tool_calls on the message.
+			result = append(result, ollama.ChatMessage{
+				Role:      msg.Role,
+				Content:   text,
+				Images:    images,
+				ToolCalls: toolCalls,
+			})
+		case hasToolResult:
+			// Tool results map to Ollama's role "tool".
+			result = append(result, ollama.ChatMessage{
+				Role:    "tool",
+				Content: text,
+				Images:  images,
+			})
+		default:
+			result = append(result, ollama.ChatMessage{
+				Role:    msg.Role,
+				Content: text,
+				Images:  images,
+			})
+		}
 	}
 	return result, nil
 }
@@ -189,9 +209,12 @@ func convertSystem(raw json.RawMessage) (*ollama.ChatMessage, error) {
 	return &ollama.ChatMessage{Role: "system", Content: combined}, nil
 }
 
-// convertContentBlocks processes an array of content blocks into combined text
-// and images.
-func convertContentBlocks(blocks []anthropicContentBlockSource) (text string, images []string, err error) {
+// convertContentBlocks processes an array of content blocks into combined text,
+// images, and tool calls. tool_use blocks become structured tool calls (Anthropic
+// input object → Ollama arguments); the text content of tool_result blocks is
+// folded into the returned text. hasToolResult reports whether any tool_result
+// block was seen so the caller can emit a role:"tool" message.
+func convertContentBlocks(blocks []anthropicContentBlockSource) (text string, images []string, toolCalls []ollama.ChatToolCall, hasToolResult bool, err error) {
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
@@ -200,12 +223,32 @@ func convertContentBlocks(blocks []anthropicContentBlockSource) (text string, im
 			if block.Source != nil {
 				images = append(images, block.Source.Data)
 			}
+		case "tool_use":
+			args := json.RawMessage(`{}`)
+			if len(block.Input) > 0 && block.Input[0] == '{' && json.Valid(block.Input) {
+				args = block.Input
+			}
+			toolCalls = append(toolCalls, ollama.ChatToolCall{
+				Function: ollama.ChatToolCallFunction{
+					Name:      block.Name,
+					Arguments: args,
+				},
+			})
+		case "tool_result":
+			hasToolResult = true
+			content, contentErr := flattenToolResult(block)
+			if contentErr != nil {
+				return text, images, toolCalls, hasToolResult, fmt.Errorf("convert content block %q: %w", block.Type, contentErr)
+			}
+			if text != "" {
+				text += "\n"
+			}
+			text += content
 		default:
-			// For tool_use, tool_result, or any other block type: serialize to JSON
-			// and append to the text content.
+			// Unknown block types: serialize to JSON as text fallback.
 			blockJSON, marshalErr := json.Marshal(block)
 			if marshalErr != nil {
-				return text, images, fmt.Errorf("convert content block %q: %w", block.Type, marshalErr)
+				return text, images, toolCalls, hasToolResult, fmt.Errorf("convert content block %q: %w", block.Type, marshalErr)
 			}
 			if text != "" {
 				text += "\n"
@@ -213,7 +256,95 @@ func convertContentBlocks(blocks []anthropicContentBlockSource) (text string, im
 			text += string(blockJSON)
 		}
 	}
-	return text, images, nil
+	return text, images, toolCalls, hasToolResult, nil
+}
+
+// flattenToolResult extracts the text from a tool_result content field, which may
+// be a plain string or an array of text/image blocks.
+func flattenToolResult(block anthropicContentBlockSource) (string, error) {
+	if len(block.Content) == 0 {
+		return "", nil
+	}
+	// Plain string content.
+	var str string
+	if err := json.Unmarshal(block.Content, &str); err == nil {
+		return str, nil
+	}
+	// Array of content blocks: keep only text.
+	var parts []anthropicContentBlockSource
+	if err := json.Unmarshal(block.Content, &parts); err != nil {
+		// Non-string, non-block content: fall back to raw JSON.
+		return string(block.Content), nil
+	}
+	var sb strings.Builder
+	for _, p := range parts {
+		if p.Type == "text" && p.Text != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(p.Text)
+		}
+	}
+	return sb.String(), nil
+}
+
+// convertAnthropicTools translates the Anthropic tool definition shape
+// ([{name, description, input_schema}]) to the OpenAI/Ollama function shape
+// ([{type:"function", function:{name, description, parameters}}]). Returns nil
+// when raw is empty or null.
+func convertAnthropicTools(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+
+	var tools []struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		InputSchema json.RawMessage `json:"input_schema"`
+	}
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return nil, fmt.Errorf("convert tools: %w", err)
+	}
+
+	out := make([]ollamaFunctionTool, 0, len(tools))
+	for _, t := range tools {
+		params := t.InputSchema
+		if len(params) == 0 || !json.Valid(params) {
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		out = append(out, ollamaFunctionTool{
+			Type: "function",
+			Function: ollamaFunctionToolFunc{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  params,
+			},
+		})
+	}
+	return json.Marshal(out)
+}
+
+// ollamaFunctionTool is the OpenAI/Ollama function-tool shape used for tool
+// definitions forwarded to Ollama.
+type ollamaFunctionTool struct {
+	Type     string                 `json:"type"`
+	Function ollamaFunctionToolFunc `json:"function"`
+}
+
+type ollamaFunctionToolFunc struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// anthropicJobKind returns KindTool when the request carries tool definitions,
+// KindChat otherwise (ARCHITECTURE §9.2).
+func anthropicJobKind(tools json.RawMessage) scheduler.JobKind {
+	if len(bytes.TrimSpace(tools)) > 0 {
+		return scheduler.KindTool
+	}
+	return scheduler.KindChat
 }
 
 // ---------------------------------------------------------------------------
@@ -276,43 +407,50 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			messages = append([]ollama.ChatMessage{*sysMsg}, messages...)
 		}
 
-		// Step 8: Build merged options.
+		// Step 8: Convert tool definitions to the Ollama shape.
+		tools, err := convertAnthropicTools(req.Tools)
+		if err != nil {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Invalid tools: "+err.Error())
+			return
+		}
+
+		// Step 9: Build merged options.
 		options, think, keepAlive := buildAnthropicOptions(
 			registry.OllamaDefaults(),
 			resolved.AliasConfig,
 			&req,
-			registry.Policy(),
 		)
 
-		// Step 9: If streaming, branch to streaming handler.
+		// Step 10: If streaming, branch to streaming handler.
 		if req.Stream != nil && *req.Stream {
-			handleStreamAnthropic(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, options, think)
+			handleStreamAnthropic(w, r, logger, sched, req.Model, resolved.Candidates, resolved.AliasConfig, messages, keepAlive, options, think, tools)
 			return
 		}
 
-		// Step 10: Create job ID.
+		// Step 11: Create job ID.
 		jobID, err := scheduler.NewJobID()
 		if err != nil {
 			writeAnthropicError(w, http.StatusInternalServerError, "api_error", "Failed to generate job ID")
 			return
 		}
 
-		// Step 11: Create and submit job to scheduler.
+		// Step 12: Create and submit job to scheduler.
 		jobCtx, cancelJob := context.WithCancel(r.Context())
 		defer cancelJob()
 
 		job := &scheduler.Job{
 			ID:             jobID,
-			Kind:           scheduler.KindChat,
-			Priority:       scheduler.KindChat.Priority(),
+			Kind:           anthropicJobKind(tools),
+			Priority:       anthropicJobKind(tools).Priority(),
 			CreatedAt:      time.Now(),
 			RequestedModel: req.Model,
 			Candidates:     resolved.Candidates,
 			AliasConfig:    resolved.AliasConfig,
 			Messages:       messages,
+			Tools:          tools,
 			Options:        options,
 			Think:          think,
-				KeepAlive:      keepAlive,
+			KeepAlive:      keepAlive,
 			ResultChan:     make(chan scheduler.JobResult, 1),
 			JobCtx:         jobCtx,
 		}
@@ -322,7 +460,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			return
 		}
 
-		// Step 12: Wait for result or client disconnect.
+		// Step 13: Wait for result or client disconnect.
 		var result scheduler.JobResult
 		select {
 		case result = <-job.ResultChan:
@@ -338,7 +476,7 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 			return
 		}
 
-		// Step 13: Map response to Anthropic-compatible shape.
+		// Step 14: Map response to Anthropic-compatible shape.
 		response := mapAnthropicResponse(result.Response, req.Model)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -354,22 +492,43 @@ func MessagesHandler(logger *logging.Logger, registry *backend.Registry, sched *
 // Options builder
 // ---------------------------------------------------------------------------
 
-// buildAnthropicOptions merges settings in order:
+// buildAnthropicOptions merges settings in order (later steps override earlier):
 //  1. Global ollama_defaults (keep_alive, think only)
-//  2. Alias overrides (think, temperature, top_p)
-//  3. req.MaxTokens → options.NumPredict (always applied)
-//  4. Client overrides (only if allow_client_override_options is true)
-//  5. Thinking override (if applicable)
+//  2. Client overrides (always forwarded): max_tokens → num_predict, temperature,
+//     top_p, top_k, stop_sequences
+//  3. Alias overrides (wins over client when explicitly set)
+//  4. Thinking override (Anthropic thinking.enabled forces temperature 1.0)
 func buildAnthropicOptions(
 	defaults config.OllamaDefaultsConfig,
 	alias *config.AliasConfig,
 	req *anthropicMessageRequest,
-	policy config.PolicyConfig,
 ) (options *ollama.ChatOptions, think *bool, keepAlive string) {
 	keepAlive = defaults.KeepAlive
 	think = defaults.Think
 
-	// Step 1: Alias overrides (think, temperature, top_p).
+	// Step 1: Client overrides (always forwarded — harmless per-request params).
+	if req.MaxTokens > 0 {
+		options = ensureChatOptions(options)
+		options.NumPredict = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		options = ensureChatOptions(options)
+		options.Temperature = *req.Temperature
+	}
+	if req.TopP != nil {
+		options = ensureChatOptions(options)
+		options.TopP = *req.TopP
+	}
+	if req.TopK != nil {
+		options = ensureChatOptions(options)
+		options.TopK = *req.TopK
+	}
+	if len(req.StopSequences) > 0 {
+		options = ensureChatOptions(options)
+		options.Stop = req.StopSequences
+	}
+
+	// Step 2: Alias overrides (wins over client when explicitly set).
 	if alias != nil {
 		if alias.Overrides.Think != nil {
 			think = alias.Overrides.Think
@@ -379,69 +538,58 @@ func buildAnthropicOptions(
 		}
 		if alias.Overrides.Options != nil {
 			opts := alias.Overrides.Options
-			if opts.Temperature != 0 || opts.TopP != 0 || opts.TopK != 0 ||
-				opts.RepeatPenalty != 0 || opts.NumPredict != 0 || opts.NumCtx != 0 ||
-				opts.UseMmap != nil {
-				options = &ollama.ChatOptions{
-					Temperature:   opts.Temperature,
-					TopP:          opts.TopP,
-					TopK:          opts.TopK,
-					RepeatPenalty: opts.RepeatPenalty,
-					NumPredict:    opts.NumPredict,
-					NumCtx:        opts.NumCtx,
-					UseMmap:       opts.UseMmap,
-				}
+			if opts.NumThread != 0 {
+				options = ensureChatOptions(options)
+				options.NumThread = opts.NumThread
+			}
+			if opts.NumCtx != 0 {
+				options = ensureChatOptions(options)
+				options.NumCtx = opts.NumCtx
+			}
+			if opts.Temperature != 0 {
+				options = ensureChatOptions(options)
+				options.Temperature = opts.Temperature
+			}
+			if opts.TopP != 0 {
+				options = ensureChatOptions(options)
+				options.TopP = opts.TopP
+			}
+			if opts.TopK != 0 {
+				options = ensureChatOptions(options)
+				options.TopK = opts.TopK
+			}
+			if opts.RepeatPenalty != 0 {
+				options = ensureChatOptions(options)
+				options.RepeatPenalty = opts.RepeatPenalty
+			}
+			if opts.NumPredict != 0 {
+				options = ensureChatOptions(options)
+				options.NumPredict = opts.NumPredict
+			}
+			if opts.UseMmap != nil {
+				options = ensureChatOptions(options)
+				options.UseMmap = opts.UseMmap
 			}
 		}
 	}
 
-	// Step 2: req.MaxTokens → options.NumPredict (always).
-	if req.MaxTokens > 0 {
-		if options == nil {
-			options = &ollama.ChatOptions{}
-		}
-		options.NumPredict = req.MaxTokens
-	}
-
-	// Step 3: Client overrides (only if allowed by policy).
-	if policy.AllowClientOverrideOptions {
-		if req.Temperature != nil {
-			if options == nil {
-				options = &ollama.ChatOptions{}
-			}
-			options.Temperature = *req.Temperature
-		}
-		if req.TopP != nil {
-			if options == nil {
-				options = &ollama.ChatOptions{}
-			}
-			options.TopP = *req.TopP
-		}
-		if req.TopK != nil {
-			if options == nil {
-				options = &ollama.ChatOptions{}
-			}
-			options.TopK = *req.TopK
-		}
-		if len(req.StopSequences) > 0 {
-			if options == nil {
-				options = &ollama.ChatOptions{}
-			}
-			options.Stop = req.StopSequences
-		}
-	}
-
-	// Step 4: Thinking override (client only, not from alias/defaults).
+	// Step 3: Thinking override (Anthropic thinking.enabled forces temperature 1.0).
 	if req.Thinking != nil && req.Thinking.Type == "enabled" {
 		thinkBool := true
 		think = &thinkBool
-		if options == nil {
-			options = &ollama.ChatOptions{}
-		}
+		options = ensureChatOptions(options)
 		options.Temperature = 1.0
 	}
 
 	return options, think, keepAlive
+}
+
+// ensureChatOptions returns o if non-nil, otherwise a new zero ChatOptions.
+func ensureChatOptions(o *ollama.ChatOptions) *ollama.ChatOptions {
+	if o == nil {
+		return &ollama.ChatOptions{}
+	}
+	return o
 }
 
 // ---------------------------------------------------------------------------
@@ -451,16 +599,10 @@ func buildAnthropicOptions(
 // mapAnthropicResponse converts an Ollama ChatResponse to an
 // anthropicMessageResponse.
 func mapAnthropicResponse(ollamaResp *ollama.ChatResponse, requestedModel string) anthropicMessageResponse {
-	return anthropicMessageResponse{
-		ID:   generateAnthropicID(),
-		Type: "message",
-		Role: "assistant",
-		Content: []anthropicResponseBlock{
-			{
-				Type: "text",
-				Text: ollamaResp.Message.Content,
-			},
-		},
+	resp := anthropicMessageResponse{
+		ID:         generateAnthropicID(),
+		Type:       "message",
+		Role:       "assistant",
 		Model:      requestedModel,
 		StopReason: mapStopReason(ollamaResp.DoneReason),
 		Usage: anthropicUsage{
@@ -468,6 +610,44 @@ func mapAnthropicResponse(ollamaResp *ollama.ChatResponse, requestedModel string
 			OutputTokens: ollamaResp.EvalCount,
 		},
 	}
+
+	if len(ollamaResp.Message.ToolCalls) > 0 {
+		// Tool-call turn: emit tool_use content blocks and stop_reason "tool_use".
+		for _, tc := range ollamaResp.Message.ToolCalls {
+			resp.Content = append(resp.Content, anthropicResponseBlock{
+				Type:  "tool_use",
+				ID:    newAnthropicToolUseID(),
+				Name:  tc.Function.Name,
+				Input: normalizeAnthropicArguments(tc.Function.Arguments),
+			})
+		}
+		resp.StopReason = "tool_use"
+		return resp
+	}
+
+	resp.Content = append(resp.Content, anthropicResponseBlock{
+		Type: "text",
+		Text: ollamaResp.Message.Content,
+	})
+	return resp
+}
+
+// newAnthropicToolUseID creates a unique tool_use block ID using crypto/rand.
+func newAnthropicToolUseID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("toolu_%016x", time.Now().UnixNano())
+	}
+	return "toolu_" + hex.EncodeToString(b)
+}
+
+// normalizeAnthropicArguments returns args as a valid JSON object, defaulting to
+// an empty object when args is empty or invalid.
+func normalizeAnthropicArguments(args json.RawMessage) json.RawMessage {
+	if len(args) == 0 || !json.Valid(args) {
+		return json.RawMessage(`{}`)
+	}
+	return args
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +669,7 @@ func handleStreamAnthropic(
 	keepAlive string,
 	options *ollama.ChatOptions,
 	think *bool,
+	tools json.RawMessage,
 ) {
 	// Set SSE headers.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -515,16 +696,17 @@ func handleStreamAnthropic(
 	streamCh := make(chan *ollama.StreamChunk, 20)
 	job := &scheduler.Job{
 		ID:             jobID,
-		Kind:           scheduler.KindChat,
-		Priority:       scheduler.KindChat.Priority(),
-			CreatedAt:      time.Now(),
+		Kind:           anthropicJobKind(tools),
+		Priority:       anthropicJobKind(tools).Priority(),
+		CreatedAt:      time.Now(),
 		Streaming:      true,
 		RequestedModel: requestedModel,
 		Candidates:     candidates,
 		AliasConfig:    aliasConfig,
 		Messages:       messages,
+		Tools:          tools,
 		Options:        options,
-			KeepAlive:      keepAlive,
+		KeepAlive:      keepAlive,
 		Think:          think,
 		StreamCh:       streamCh,
 		ResultChan:     make(chan scheduler.JobResult, 1),
@@ -553,6 +735,9 @@ func handleStreamAnthropic(
 	}()
 
 	sentStart := false
+	sawToolCalls := false
+	blockIndex := 0
+	textIndex := 0
 
 	// Read chunks from the scheduler's stream channel.
 	for chunk := range job.StreamCh {
@@ -574,38 +759,81 @@ func handleStreamAnthropic(
 
 		resp := chunk.Response
 		content := resp.Message.Content
+		toolCalls := resp.Message.ToolCalls
+
+		// Ollama delivers tool calls in a single chunk with empty content. Emit a
+		// tool_use content block per call: start (full input) → input_json_delta →
+		// stop.
+		if len(toolCalls) > 0 {
+			sawToolCalls = true
+			for _, tc := range toolCalls {
+				index := blockIndex
+				blockIndex++
+				args := normalizeAnthropicArguments(tc.Function.Arguments)
+
+				writeAnthropicSSEEvent(w, "content_block_start", sseContentBlockStart{
+					Type:  "content_block_start",
+					Index: index,
+					ContentBlock: anthropicResponseBlock{
+						Type:  "tool_use",
+						ID:    newAnthropicToolUseID(),
+						Name:  tc.Function.Name,
+						Input: args,
+					},
+				})
+
+				delta, err := json.Marshal(anthropicToolUseDelta{
+					Type:        "input_json_delta",
+					PartialJSON: string(args),
+				})
+				if err != nil {
+					if logger != nil {
+						logger.Warn("streaming: marshal tool_use delta",
+							logging.String("error", err.Error()),
+						)
+					}
+					continue
+				}
+				writeAnthropicSSEEvent(w, "content_block_delta", sseContentBlockDelta{
+					Type:  "content_block_delta",
+					Index: index,
+					Delta: delta,
+				})
+
+				writeAnthropicSSEEvent(w, "content_block_stop", sseContentBlockStop{
+					Type:  "content_block_stop",
+					Index: index,
+				})
+			}
+		}
 
 		// Emit content block events for non-empty content.
 		if content != "" {
 			if !sentStart {
 				// First content chunk: emit content_block_start (empty text) then
 				// content_block_delta with the actual text.
+				textIndex = blockIndex
+				blockIndex++
+				sentStart = true
 				writeAnthropicSSEEvent(w, "content_block_start", sseContentBlockStart{
 					Type:  "content_block_start",
-					Index: 0,
+					Index: textIndex,
 					ContentBlock: anthropicResponseBlock{
 						Type: "text",
 						Text: "",
 					},
 				})
-				sentStart = true
+			}
 
+			delta, err := json.Marshal(anthropicTextDelta{
+				Type: "text_delta",
+				Text: content,
+			})
+			if err == nil {
 				writeAnthropicSSEEvent(w, "content_block_delta", sseContentBlockDelta{
 					Type:  "content_block_delta",
-					Index: 0,
-					Delta: anthropicTextDelta{
-						Type: "text_delta",
-						Text: content,
-					},
-				})
-			} else {
-				writeAnthropicSSEEvent(w, "content_block_delta", sseContentBlockDelta{
-					Type:  "content_block_delta",
-					Index: 0,
-					Delta: anthropicTextDelta{
-						Type: "text_delta",
-						Text: content,
-					},
+					Index: textIndex,
+					Delta: delta,
 				})
 			}
 		}
@@ -615,14 +843,19 @@ func handleStreamAnthropic(
 			if sentStart {
 				writeAnthropicSSEEvent(w, "content_block_stop", sseContentBlockStop{
 					Type:  "content_block_stop",
-					Index: 0,
+					Index: textIndex,
 				})
+			}
+
+			stopReason := mapStopReason(resp.DoneReason)
+			if sawToolCalls {
+				stopReason = "tool_use"
 			}
 
 			writeAnthropicSSEEvent(w, "message_delta", sseMessageDelta{
 				Type: "message_delta",
 				Delta: anthropicStopDelta{
-					StopReason: mapStopReason(resp.DoneReason),
+					StopReason: stopReason,
 				},
 				Usage: anthropicUsage{
 					InputTokens:  resp.PromptEvalCount,

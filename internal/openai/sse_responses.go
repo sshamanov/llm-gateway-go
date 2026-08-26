@@ -14,6 +14,7 @@ type sseResponseEvent struct {
 	ItemID      string             `json:"item_id,omitempty"`
 	OutputIndex int                `json:"output_index,omitempty"`
 	ContentIdx  int                `json:"content_index,omitempty"`
+	Item        *responsesOutput   `json:"item,omitempty"`
 	Response    *responsesResponse `json:"response,omitempty"`
 }
 

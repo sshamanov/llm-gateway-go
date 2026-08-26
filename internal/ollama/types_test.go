@@ -478,3 +478,46 @@ func TestChatResponse_OptionalFieldsOmitted(t *testing.T) {
 		t.Error("expected 'done_reason' to be omitted from JSON output")
 	}
 }
+
+func TestChatMessageToolCallsRoundTrip(t *testing.T) {
+	msg := ChatMessage{
+		Role:    "assistant",
+		Content: "",
+		ToolCalls: []ChatToolCall{
+			{
+				Function: ChatToolCallFunction{
+					Name:      "get_weather",
+					Arguments: json.RawMessage(`{"location":"SF"}`),
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("unexpected error marshaling ChatMessage: %v", err)
+	}
+
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unexpected error unmarshaling into map: %v", err)
+	}
+
+	if _, ok := out["tool_calls"]; !ok {
+		t.Fatalf("expected 'tool_calls' in JSON output, got %s", data)
+	}
+
+	var back ChatMessage
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unexpected error unmarshaling ChatMessage: %v", err)
+	}
+	if len(back.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(back.ToolCalls))
+	}
+	if back.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("expected function name 'get_weather', got %q", back.ToolCalls[0].Function.Name)
+	}
+	if string(back.ToolCalls[0].Function.Arguments) != `{"location":"SF"}` {
+		t.Errorf("expected arguments `{\"location\":\"SF\"}`, got %s", back.ToolCalls[0].Function.Arguments)
+	}
+}

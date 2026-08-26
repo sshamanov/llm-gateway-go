@@ -1367,3 +1367,304 @@ func TestConvertContentParts_StripsDataURLPrefix(t *testing.T) {
 		t.Errorf("expected raw base64 %q, got %q", "iVBORw0KGgo", images[0])
 	}
 }
+
+func TestConvertOpenAIChatMessages_ToolCalls(t *testing.T) {
+	msgs := []chatRequestMessage{
+		{Role: "user", Content: json.RawMessage(`"What's the weather in SF?"`)},
+		{
+			Role:    "assistant",
+			Content: json.RawMessage(`null`),
+			ToolCalls: []openAIToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: openAIToolCallFunction{
+						Name:      "get_weather",
+						Arguments: `{"location":"SF"}`,
+					},
+				},
+			},
+		},
+		{Role: "tool", Content: json.RawMessage(`"22C"`), ToolCallID: "call_1"},
+	}
+
+	result, err := convertOpenAIChatMessages(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(result))
+	}
+
+	// Assistant tool_calls: arguments string decoded to object, id dropped.
+	assistant := result[1]
+	if assistant.Role != "assistant" {
+		t.Errorf("expected role assistant, got %q", assistant.Role)
+	}
+	if len(assistant.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(assistant.ToolCalls))
+	}
+	if assistant.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("expected function name get_weather, got %q", assistant.ToolCalls[0].Function.Name)
+	}
+	if string(assistant.ToolCalls[0].Function.Arguments) != `{"location":"SF"}` {
+		t.Errorf("expected arguments object, got %s", assistant.ToolCalls[0].Function.Arguments)
+	}
+
+	// Tool result: role preserved, content preserved, tool_call_id dropped.
+	toolResult := result[2]
+	if toolResult.Role != "tool" {
+		t.Errorf("expected role tool, got %q", toolResult.Role)
+	}
+	if toolResult.Content != "22C" {
+		t.Errorf("expected content 22C, got %q", toolResult.Content)
+	}
+	if len(toolResult.ToolCalls) != 0 {
+		t.Errorf("expected no tool_calls on tool result message")
+	}
+}
+
+func TestConvertOpenAIChatMessages_ToolCalls_BadArguments(t *testing.T) {
+	msgs := []chatRequestMessage{
+		{
+			Role:    "assistant",
+			Content: json.RawMessage(`""`),
+			ToolCalls: []openAIToolCall{
+				{
+					Function: openAIToolCallFunction{Name: "f", Arguments: "not-json"},
+				},
+			},
+		},
+	}
+	result, err := convertOpenAIChatMessages(msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(result[0].ToolCalls[0].Function.Arguments) != "{}" {
+		t.Errorf("expected fallback {} for invalid arguments, got %s", result[0].ToolCalls[0].Function.Arguments)
+	}
+}
+
+func TestBuildOllamaRequest_ForwardsTools(t *testing.T) {
+	tools := json.RawMessage(`[{"type":"function","function":{"name":"get_weather"}}]`)
+	req := chatCompletionRequest{Model: "m", Tools: tools}
+	messages := []ollama.ChatMessage{{Role: "user", Content: "hi"}}
+
+	ollamaReq := buildOllamaRequest("qwen:30b", messages, config.OllamaDefaultsConfig{}, nil, &req)
+
+	if len(ollamaReq.Tools) == 0 {
+		t.Fatal("expected tools to be forwarded to the Ollama request")
+	}
+	if string(ollamaReq.Tools) != string(tools) {
+		t.Errorf("expected tools %s, got %s", tools, ollamaReq.Tools)
+	}
+}
+
+func TestHasTools(t *testing.T) {
+	for name, tt := range map[string]struct {
+		raw      string
+		expected bool
+	}{
+		"nil":        {`null`, false},
+		"empty":      {``, false},
+		"empty-arr":  {`[]`, false},
+		"whitespace": {`   `, false},
+		"one-tool":   {`[{"type":"function"}]`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := hasTools(json.RawMessage(tt.raw)); got != tt.expected {
+				t.Errorf("expected hasTools=%v, got %v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestChatCompletions_ToolCall(t *testing.T) {
+	var capturedBody atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			body, _ := io.ReadAll(r.Body)
+			capturedBody.Store(string(body))
+			json.NewEncoder(w).Encode(ollama.ChatResponse{
+				Model: "qwen:30b",
+				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+				Message: ollama.ChatMessage{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: []ollama.ChatToolCall{
+						{Function: ollama.ChatToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"location":"SF"}`)}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 10,
+				EvalCount:       5,
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{Models: []ollama.TagsModel{{Name: "qwen:30b"}}})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: false,
+		Aliases: []config.AliasConfig{{
+			Name:         "my-alias",
+			PrimaryModel: "qwen:30b",
+		}},
+	}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ChatCompletionsHandler(logger, reg, sched)
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"my-alias","messages":[{"role":"user","content":"What's the weather in SF?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d: %s", resp.StatusCode, raw)
+	}
+
+	// The proxy must have forwarded tools to Ollama.
+	sent := capturedBody.Load().(string)
+	if !strings.Contains(sent, `"tools"`) {
+		t.Errorf("expected tools in Ollama request, got: %s", sent)
+	}
+
+	var result chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(result.Choices))
+	}
+	msg := result.Choices[0].Message
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call in response, got %d", len(msg.ToolCalls))
+	}
+	if msg.ToolCalls[0].ID == "" {
+		t.Error("expected generated tool call id")
+	}
+	if msg.ToolCalls[0].Type != "function" {
+		t.Errorf("expected type function, got %q", msg.ToolCalls[0].Type)
+	}
+	if msg.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("expected function name get_weather, got %q", msg.ToolCalls[0].Function.Name)
+	}
+	if msg.ToolCalls[0].Function.Arguments != `{"location":"SF"}` {
+		t.Errorf("expected stringified arguments, got %q", msg.ToolCalls[0].Function.Arguments)
+	}
+	if result.Choices[0].FinishReason != "tool_calls" {
+		t.Errorf("expected finish_reason tool_calls, got %q", result.Choices[0].FinishReason)
+	}
+}
+
+func TestChatCompletions_Streaming_ToolCall(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			json.NewEncoder(w).Encode(ollama.ChatResponse{
+				Model: "qwen:30b",
+				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+				Message: ollama.ChatMessage{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: []ollama.ChatToolCall{
+						{Function: ollama.ChatToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"location":"SF"}`)}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 10,
+				EvalCount:       5,
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{Models: []ollama.TagsModel{{Name: "qwen:30b"}}})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: false,
+		Aliases: []config.AliasConfig{{
+			Name:         "my-alias",
+			PrimaryModel: "qwen:30b",
+		}},
+	}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := ChatCompletionsHandler(logger, reg, sched)
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"my-alias","messages":[{"role":"user","content":"What's the weather in SF?"}],"stream":true,"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sse := string(respBody)
+
+	if !strings.Contains(sse, `"tool_calls"`) {
+		t.Errorf("expected tool_calls in SSE stream, got: %s", sse)
+	}
+	if !strings.Contains(sse, `"get_weather"`) {
+		t.Errorf("expected function name get_weather in SSE stream")
+	}
+	if !strings.Contains(sse, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected finish_reason tool_calls in SSE stream, got: %s", sse)
+	}
+	if !strings.Contains(sse, "[DONE]") {
+		t.Errorf("expected [DONE] marker")
+	}
+}

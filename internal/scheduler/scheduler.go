@@ -293,6 +293,7 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 			Options:   job.Options,
 			Think:     job.Think,
 			KeepAlive: job.KeepAlive,
+			Tools:     job.Tools,
 		}
 		s.mergeBackendOptions(&chatReq, currentBackendID)
 
@@ -445,6 +446,7 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 			Options:   job.Options,
 			Think:     job.Think,
 			KeepAlive: job.KeepAlive,
+			Tools:     job.Tools,
 		}
 		s.mergeBackendOptions(&chatReq, currentBackendID)
 

@@ -907,7 +907,7 @@ func TestBuildAnthropicOptions_ThinkOverride(t *testing.T) {
 		},
 	}
 
-	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{})
+	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req)
 
 	if keepAlive != "5m" {
 		t.Errorf("expected KeepAlive '5m', got %q", keepAlive)
@@ -948,9 +948,7 @@ func TestBuildAnthropicOptions_ClientOverrides(t *testing.T) {
 		StopSequences: []string{"\n", "user:"},
 	}
 
-	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
-		AllowClientOverrideOptions: true,
-	})
+	options, think, keepAlive := buildAnthropicOptions(defaults, nil, req)
 
 	if keepAlive != "" {
 		t.Errorf("expected empty KeepAlive, got %q", keepAlive)
@@ -981,8 +979,17 @@ func TestBuildAnthropicOptions_ClientOverrides(t *testing.T) {
 	}
 }
 
-func TestBuildAnthropicOptions_ClientOverridesDisallowed(t *testing.T) {
+func TestBuildAnthropicOptions_AliasWinsOverClient(t *testing.T) {
 	defaults := config.OllamaDefaultsConfig{}
+
+	alias := &config.AliasConfig{
+		Name: "test-alias",
+		Overrides: config.AliasOverrides{
+			Options: &config.OllamaOptions{
+				Temperature: 0.1,
+			},
+		},
+	}
 
 	temp := 0.3
 	req := &anthropicMessageRequest{
@@ -991,17 +998,15 @@ func TestBuildAnthropicOptions_ClientOverridesDisallowed(t *testing.T) {
 		Temperature: &temp,
 	}
 
-	options, _, _ := buildAnthropicOptions(defaults, nil, req, config.PolicyConfig{
-		AllowClientOverrideOptions: false,
-	})
+	options, _, _ := buildAnthropicOptions(defaults, alias, req)
 
-	// Temperature should be 0 (no global, no alias, client override disallowed).
-	if options.Temperature != 0 {
-		t.Errorf("expected Temperature 0 (no global/alias defaults), got %f", options.Temperature)
+	// Alias wins over client.
+	if options.Temperature != 0.1 {
+		t.Errorf("expected Temperature 0.1 (alias overrides client 0.3), got %f", options.Temperature)
 	}
-	// MaxTokens always applies regardless of AllowClientOverrideOptions.
+	// NumPredict from client is preserved (alias didn't set num_predict).
 	if options.NumPredict != 200 {
-		t.Errorf("expected NumPredict 200 (always applied), got %d", options.NumPredict)
+		t.Errorf("expected NumPredict 200 (client, alias didn't override), got %d", options.NumPredict)
 	}
 }
 
@@ -1022,7 +1027,7 @@ func TestBuildAnthropicOptions_AliasOverrides(t *testing.T) {
 		MaxTokens: 100,
 	}
 
-	options, _, _ := buildAnthropicOptions(defaults, alias, req, config.PolicyConfig{})
+	options, _, _ := buildAnthropicOptions(defaults, alias, req)
 
 	if options.Temperature != 0.1 {
 		t.Errorf("expected Temperature 0.1 (alias override), got %f", options.Temperature)
@@ -1119,13 +1124,324 @@ func TestConvertInputMessages_ToolUseBlock(t *testing.T) {
 	if result[0].Role != "assistant" {
 		t.Errorf("expected Role 'assistant', got %q", result[0].Role)
 	}
-	if !strings.Contains(result[0].Content, "Let me check the weather.") {
-		t.Errorf("expected content to contain text, got %q", result[0].Content)
+	if result[0].Content != "Let me check the weather." {
+		t.Errorf("expected text content, got %q", result[0].Content)
 	}
-	if !strings.Contains(result[0].Content, "tool_use") {
-		t.Errorf("expected content to contain tool_use JSON, got %q", result[0].Content)
+	if len(result[0].ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(result[0].ToolCalls))
 	}
-	if !strings.Contains(result[0].Content, "get_weather") {
-		t.Errorf("expected content to contain function name, got %q", result[0].Content)
+	if result[0].ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("expected tool call name 'get_weather', got %q", result[0].ToolCalls[0].Function.Name)
+	}
+	if string(result[0].ToolCalls[0].Function.Arguments) != `{"location":"SF"}` {
+		t.Errorf("expected arguments object, got %s", result[0].ToolCalls[0].Function.Arguments)
+	}
+	if strings.Contains(result[0].Content, "tool_use") {
+		t.Errorf("expected tool_use not serialized into text, got %q", result[0].Content)
+	}
+}
+
+func TestConvertInputMessages_ToolResult(t *testing.T) {
+	rawContent := json.RawMessage(`[
+		{"type":"tool_result","tool_use_id":"toolu_123","content":"sunny, 72F"}
+	]`)
+	msgs := []anthropicInputMessage{
+		{Role: "user", Content: rawContent},
+	}
+
+	result, err := convertInputMessages(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(result))
+	}
+	if result[0].Role != "tool" {
+		t.Errorf("expected Role 'tool', got %q", result[0].Role)
+	}
+	if result[0].Content != "sunny, 72F" {
+		t.Errorf("expected tool result content, got %q", result[0].Content)
+	}
+}
+
+func TestConvertAnthropicTools(t *testing.T) {
+	raw := json.RawMessage(`[
+		{
+			"name":"get_weather",
+			"description":"Get current weather",
+			"input_schema":{"type":"object","properties":{"location":{"type":"string"}}}
+		}
+	]`)
+	result, err := convertAnthropicTools(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded []map[string]interface{}
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(decoded))
+	}
+	if decoded[0]["type"] != "function" {
+		t.Errorf("expected type 'function', got %v", decoded[0]["type"])
+	}
+	fn, ok := decoded[0]["function"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected function key, got %v", decoded[0])
+	}
+	if fn["name"] != "get_weather" {
+		t.Errorf("expected name 'get_weather', got %v", fn["name"])
+	}
+	if fn["description"] != "Get current weather" {
+		t.Errorf("expected description 'Get current weather', got %v", fn["description"])
+	}
+	params, ok := fn["parameters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected parameters object, got %v", fn["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("expected parameters.type 'object', got %v", params["type"])
+	}
+}
+
+func TestConvertAnthropicTools_Nil(t *testing.T) {
+	result, err := convertAnthropicTools(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Errorf("expected nil for empty tools, got %s", result)
+	}
+}
+
+func TestMessages_ToolUse(t *testing.T) {
+	var lastBody atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			body, _ := io.ReadAll(r.Body)
+			lastBody.Store(string(body))
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ollama.ChatResponse{
+				Model:     "model-b",
+				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+				Message: ollama.ChatMessage{
+					Role: "assistant",
+					ToolCalls: []ollama.ChatToolCall{
+						{
+							Function: ollama.ChatToolCallFunction{
+								Name:      "get_weather",
+								Arguments: json.RawMessage(`{"location":"SF"}`),
+							},
+						},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 10,
+				EvalCount:       20,
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{
+				Models: []ollama.TagsModel{{Name: "model-b"}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: false,
+		Aliases: []config.AliasConfig{{
+			Name:         "my-alias",
+			PrimaryModel: "model-b",
+		}},
+	}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := MessagesHandler(logger, reg, sched)
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{
+		"model":"my-alias",
+		"max_tokens":100,
+		"tools":[{"name":"get_weather","description":"Get current weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}}}}],
+		"messages":[
+			{"role":"user","content":"What's the weather in SF?"},
+			{"role":"assistant","content":[{"type":"text","text":"I'll check."},{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"location":"SF"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"sunny, 72F"}]}
+		]
+	}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d: %s", resp.StatusCode, bodyBytes)
+	}
+
+	// Verify tools were forwarded to Ollama and history was translated.
+	reqBody := lastBody.Load()
+	if reqBody == nil {
+		t.Fatal("expected /api/chat request body captured")
+	}
+	var ollamaReq ollama.ChatRequest
+	if err := json.Unmarshal([]byte(reqBody.(string)), &ollamaReq); err != nil {
+		t.Fatal(err)
+	}
+	if len(ollamaReq.Tools) == 0 || !strings.Contains(string(ollamaReq.Tools), "get_weather") {
+		t.Errorf("expected tools forwarded to Ollama, got %s", ollamaReq.Tools)
+	}
+	var sawToolCall, sawToolResult bool
+	for _, m := range ollamaReq.Messages {
+		if m.Role == "assistant" && len(m.ToolCalls) == 1 && m.ToolCalls[0].Function.Name == "get_weather" {
+			sawToolCall = true
+		}
+		if m.Role == "tool" && m.Content == "sunny, 72F" {
+			sawToolResult = true
+		}
+	}
+	if !sawToolCall {
+		t.Errorf("expected assistant tool_calls in forwarded messages, got %+v", ollamaReq.Messages)
+	}
+	if !sawToolResult {
+		t.Errorf("expected role 'tool' message in forwarded messages, got %+v", ollamaReq.Messages)
+	}
+
+	// Verify response has tool_use blocks.
+	var result anthropicMessageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.StopReason != "tool_use" {
+		t.Errorf("expected StopReason 'tool_use', got %q", result.StopReason)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(result.Content))
+	}
+	if result.Content[0].Type != "tool_use" {
+		t.Errorf("expected content block type 'tool_use', got %q", result.Content[0].Type)
+	}
+	if result.Content[0].Name != "get_weather" {
+		t.Errorf("expected name 'get_weather', got %q", result.Content[0].Name)
+	}
+	if !strings.HasPrefix(result.Content[0].ID, "toolu_") {
+		t.Errorf("expected ID prefix 'toolu_', got %q", result.Content[0].ID)
+	}
+	if string(result.Content[0].Input) != `{"location":"SF"}` {
+		t.Errorf("expected input object, got %s", result.Content[0].Input)
+	}
+}
+
+func TestMessages_Streaming_ToolUse(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			fmt.Fprintf(w, `{"model":"model-b","message":{"role":"assistant","tool_calls":[{"function":{"name":"get_weather","arguments":{"location":"SF"}}}]},"done":false}`+"\n")
+			fmt.Fprintf(w, `{"model":"model-b","message":{"role":"assistant","content":""},"done":true,"total_duration":1000000000,"eval_count":5}`+"\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{
+				Models: []ollama.TagsModel{{Name: "model-b"}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: false,
+		Aliases: []config.AliasConfig{{
+			Name:         "my-alias",
+			PrimaryModel: "model-b",
+		}},
+	}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+
+	time.Sleep(200 * time.Millisecond)
+
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+
+	handler := MessagesHandler(logger, reg, sched)
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"my-alias","messages":[{"role":"user","content":"What's the weather?"}],"max_tokens":100,"stream":true,"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}}}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyStr := string(respBody)
+
+	if !strings.Contains(bodyStr, "content_block_start") {
+		t.Error("expected content_block_start event")
+	}
+	if !strings.Contains(bodyStr, `"type":"tool_use"`) {
+		t.Error("expected tool_use content block")
+	}
+	if !strings.Contains(bodyStr, `"name":"get_weather"`) {
+		t.Error("expected tool name get_weather")
+	}
+	if !strings.Contains(bodyStr, `"input_json_delta"`) {
+		t.Error("expected input_json_delta event")
+	}
+	if !strings.Contains(bodyStr, `{"location":"SF"}`) {
+		t.Error("expected tool input JSON in delta")
+	}
+	if !strings.Contains(bodyStr, `"stop_reason":"tool_use"`) {
+		t.Error("expected stop_reason tool_use")
+	}
+	if !strings.Contains(bodyStr, "content_block_stop") {
+		t.Error("expected content_block_stop event")
+	}
+	if !strings.Contains(bodyStr, "[DONE]") {
+		t.Error("expected [DONE] marker")
 	}
 }

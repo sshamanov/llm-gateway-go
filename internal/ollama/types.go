@@ -57,9 +57,23 @@ type ChatRequest struct {
 
 // ChatMessage represents a single message in a chat conversation.
 type ChatMessage struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Images  []string `json:"images,omitempty"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	Images    []string       `json:"images,omitempty"`
+	ToolCalls []ChatToolCall `json:"tool_calls,omitempty"`
+}
+
+// ChatToolCall represents a function invocation attached to an assistant
+// message or returned by the model. Arguments holds the raw JSON object form
+// that Ollama requires (both in conversation history and in responses).
+type ChatToolCall struct {
+	Function ChatToolCallFunction `json:"function"`
+}
+
+// ChatToolCallFunction holds the function name and arguments of a tool call.
+type ChatToolCallFunction struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 // ChatOptions maps to the "options" object in the Ollama /api/chat request.

@@ -3,8 +3,11 @@ package scheduler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,6 +202,60 @@ func TestScheduler_Dispatch_Basic(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for job result")
+	}
+}
+
+func TestScheduler_Dispatch_ForwardsTools(t *testing.T) {
+	var capturedBody atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		capturedBody.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(validChatResponse("llama3", "Hello")))
+	}))
+	defer server.Close()
+
+	cfg := defaultConfig()
+	s := newTestScheduler(t, server.URL, 2, cfg)
+	defer s.Stop()
+
+	job := &Job{
+		ID:         "job-tools",
+		Candidates: []string{"llama3"},
+		Messages:   []ollama.ChatMessage{{Role: "user", Content: "What's the weather?"}},
+		Tools:      json.RawMessage(`[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]`),
+		ResultChan: make(chan JobResult, 1),
+	}
+
+	if err := s.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	s.Start()
+
+	select {
+	case result := <-job.ResultChan:
+		if result.Err != nil {
+			t.Fatalf("job failed: %v", result.Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for job result")
+	}
+
+	body := capturedBody.Load()
+	if body == nil {
+		t.Fatal("expected /api/chat request body captured")
+	}
+	var chatReq ollama.ChatRequest
+	if err := json.Unmarshal([]byte(body.(string)), &chatReq); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(chatReq.Tools), "get_weather") {
+		t.Errorf("expected tools forwarded in dispatch request, got %s", chatReq.Tools)
 	}
 }
 
