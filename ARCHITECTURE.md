@@ -205,7 +205,16 @@ Config changes require container restart.
       "url": "http://127.0.0.1:11434",
       "host": "default",
       "max_concurrent_requests": 1,
-      "enabled": true
+      "enabled": true,
+      "keep_alive": "10m",
+      "think": false,
+      "options": {
+        "num_thread": 8,
+        "num_ctx": 8192,
+        "top_k": 40,
+        "repeat_penalty": 1.1,
+        "num_predict": -1
+      }
     }
   ],
   "image_backends": [
@@ -215,43 +224,39 @@ Config changes require container restart.
       "url": "http://127.0.0.1:8080/v1",
       "host": "default",
       "max_concurrent_requests": 1,
+      "api_key": "sk-...",
       "enabled": false
     }
   ],
   "audio_backends": [],
   "ollama_defaults": {
     "keep_alive": "10m",
-    "think": false,
-    "options": {
-      "num_thread": 8,
-      "num_ctx": 8192,
-      "temperature": 0.2,
-      "top_p": 0.9
-    }
+    "think": false
   },
   "models": {
-    "expose_native_ollama_models": true,
+    "expose_native_ollama_models": false,
     "aliases": [
       {
-        "name": "qwen-instruct",
+        "name": "base-agent",
         "primary_model": "qwen:30b",
         "backup_models": ["qwen:14b", "qwen:72b"],
         "overrides": {
           "think": false,
           "options": {
-            "temperature": 0.2
+            "num_ctx": 8192,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.1,
+            "num_predict": -1
           }
         }
       },
       {
         "name": "qwen-thinking",
-        "primary_model": "qwen:30b",
-        "backup_models": ["qwen:14b", "qwen:72b"],
+        "extends": "base-agent",
         "overrides": {
-          "think": true,
-          "options": {
-            "temperature": 0.2
-          }
+          "think": true
         }
       }
     ]
@@ -278,6 +283,7 @@ Config changes require container restart.
     "aging_per_second": 0.05,
     "unknown_tokens_per_second": 5.0,
     "unknown_cold_load_penalty_seconds": 30.0,
+    "exploration_bonus": 3.0,
     "alias_substitution_penalty_seconds": 8.0,
     "disruption_factor": 0.25,
     "retry": {
@@ -293,9 +299,18 @@ Config changes require container restart.
 
 - Config is loaded once at startup.
 - No hot reload.
+- OpenAI-compatible image/audio backends may carry an `api_key`; when set it is
+  sent to the backend as `Authorization: Bearer <key>`.
 - `host` on a backend is optional, but strongly preferred.
 - If backend host is missing, derive host ID from URL hostname.
 - Aliases may override Ollama options.
+- Aliases may extend another alias via `extends` — the child inherits the parent's
+  primary/backup models and overrides (deep-merged, child wins); circular refs,
+  missing parents, and duplicate names are config errors.
+- `ollama_defaults` carries only `keep_alive` and `think`; sampling/runtime options
+  live on backends and aliases, not globally.
+- Backends may carry `keep_alive`, `think`, and `options` (num_thread, num_ctx,
+  top_k, repeat_penalty, num_predict, use_mmap), applied at dispatch.
 - Native Ollama model names may be exposed if enabled.
 - Native model requests mean exact model only.
 - Alias backup models apply only to aliases.
@@ -406,6 +421,16 @@ Suggested intervals:
 
 Refresh immediately after backend recovery.
 
+Removed models: a successful `/api/tags` poll overwrites the backend's
+`AvailableModels`, so a model deleted from Ollama disappears from the proxy list
+on the next poll (~60s) while the backend is reachable. If the backend becomes
+unreachable, its models persist until `modelStaleness` (5 minutes) elapses since
+the last successful tags poll; `pollTags` then clears `AvailableModels` on
+failure. Learned per-model scheduler stats (`StatsTracker`) are pruned on a
+1-minute ticker in `cmd/proxy/main.go` (`pruneModelStats`), keeping only rows
+whose `BackendModelKey` matches a backend's current `AvailableModels`. No extra
+polling is performed — both mechanisms ride existing tickers.
+
 ## 7.2 Exposed models
 
 `GET /v1/models` returns:
@@ -452,6 +477,19 @@ Primary model has no substitution cost.
 Backup models have a fixed substitution cost.
 
 Do not distinguish up-model and down-model.
+
+Aliases may inherit from a parent via `extends`:
+
+```json
+{
+  "name": "qwen-thinking",
+  "extends": "base-agent",
+  "overrides": { "think": true }
+}
+```
+
+The child inherits the parent's `primary_model`, `backup_models`, and `overrides`
+(deep-merged, child wins). `extends` chains are flattened at config load.
 
 ## 7.5 Native model behavior
 
@@ -503,14 +541,18 @@ Base Ollama request shape:
 }
 ```
 
-Apply settings in this order:
+Apply settings in this order — later steps override earlier ones:
 
-1. global `ollama_defaults`
-2. alias overrides, if request used an alias
-3. safe client overrides only if `allow_client_override_options=true`
-4. Anthropic thinking override only if `allow_anthropic_thinking_override=true`
+1. global `ollama_defaults` — `keep_alive` and `think` only
+2. client overrides — `max_tokens`/`max_output_tokens` → `num_predict` always;
+   `temperature`, `top_p`, `top_k`, `stop` always forwarded
+3. alias overrides — `think`, `keep_alive`, and `options`; alias wins over client
+   when explicitly set
+4. per-backend overrides, applied at dispatch — `keep_alive`, `think`, and
+   `options.num_thread`, `num_ctx`, `top_k`, `repeat_penalty`, `num_predict`, `use_mmap`
 
-Remove `allow_client_override_keep_alive`; keep-alive is backend/alias config only.
+Per-backend options do NOT override `temperature`/`top_p` — those remain
+per-model/alias/client. Keep-alive is backend/alias config only.
 
 No global `strip_reasoning_from_output` flag.
 
@@ -663,6 +705,7 @@ cost =
 + failure_penalty
 - priority_credit
 - aging_credit
+- exploration_credit
 ```
 
 ### Priority credit
@@ -677,11 +720,22 @@ priority_credit = base_priority / 10
 aging_credit = wait_seconds * aging_per_second
 ```
 
+### Exploration credit
+
+```text
+exploration_credit = exploration_bonus / (1 + samples)
+```
+
+Unknown backend/model pairs get a cost reduction that decays as samples accumulate,
+creating natural round-robin exploration of untried backends.
+
 ### Estimated generation time
 
 ```text
-estimated_generation_time = estimated_output_tokens / learned_tokens_per_second
+estimated_generation_time = 256 / learned_tokens_per_second
 ```
+
+v1 uses a fixed 256-token output estimate (no per-request token prediction).
 
 If unknown:
 
@@ -1167,6 +1221,27 @@ Out of scope:
 - audit trail for tool execution
 
 Clients such as Open WebUI, OpenClaw, LiteLLM, or agent runtimes should execute tools.
+
+### 15.1 Implementation
+
+Implemented for Chat Completions, Responses, and Anthropic Messages (streaming and
+non-streaming):
+
+- Tool definitions: OpenAI and Responses pass through verbatim (OpenAI ↔ Ollama
+  shapes are identical); Anthropic `input_schema` is translated to the
+  `parameters` field of the OpenAI/Ollama function shape
+  (`convertAnthropicTools`).
+- History: assistant `tool_calls` (`arguments` JSON string + `id` in OpenAI) are
+  decoded to Ollama's object form (`ollama.ChatMessage.ToolCalls`); Anthropic
+  `tool_use` blocks become tool calls, `tool_result` blocks become
+  `role:"tool"` messages; OpenAI `role:"tool"` messages pass through.
+- Response: Ollama `tool_calls` are mapped back to each API's shape
+  (`finish_reason:"tool_calls"` for Chat Completions, `function_call` output
+  items for Responses, `tool_use` blocks + `stop_reason:"tool_use"` for
+  Anthropic), including the streaming event sequences.
+- A request carrying tool definitions is scheduled as `tool` (priority 90),
+  per §9.2. `tool_choice` is accepted and ignored (Ollama has no native
+  tool_choice); default auto behavior applies.
 
 ---
 

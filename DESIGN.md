@@ -257,13 +257,24 @@ Show one row per host:
 | Active jobs | current active jobs |
 | Capacity | `max_active_jobs` |
 | Queued jobs targeting host | if available |
-| Status | available/full/degraded |
+| Status | available/full/degraded/down/disabled |
+
+Host status reflects backend health, not just job load:
+
+- `available` — at least one backend up, capacity free
+- `full` — at least one backend up, host at capacity
+- `degraded` — some backends up, at least one down
+- `down` — backends exist but none of the enabled ones is healthy
+- `disabled` — all configured backends on the host are disabled
+
+A host with no tracked backends falls back to capacity-only status.
 
 Example:
 
 ```text
 desktop-gpu  1/1 active  full
 mini-pc      0/1 active  available
+worker-x     0/1 active  down
 ```
 
 ## 6.3 Backend panel
@@ -290,8 +301,15 @@ Show:
 - native Ollama models
 - alias primary model
 - alias backup models
+- alias `extends` parent (when inherited)
 - backend availability
 - disabled backend/model pairs
+
+A model deleted from Ollama disappears from the panel and from `GET /v1/models`
+within ~60s while its backend is reachable. If the backend is unreachable at
+removal time, its native models linger at most ~5 minutes (staleness window),
+then drop from the list and from the learned per-model scheduler stats. No extra
+backend polling is performed for this.
 
 Example:
 
@@ -448,10 +466,31 @@ Aliases may have:
 - primary model
 - backup models
 - override settings
+- an `extends` parent alias (inherited primary/backup models and overrides, deep-merged so the child wins)
 
-Clients choose aliases when they want policy-level behavior.
+Clients choose aliases when they want policy-level behavior. A client sees the
+alias's resolved result; the `extends` parent is not exposed as a separate model.
 
 Native model names mean exact model request.
+
+## 8.4 Tool and function calling
+
+All three chat APIs (OpenAI Chat Completions, OpenAI Responses, Anthropic
+Messages) support function/tool calling in both non-streaming and streaming mode:
+
+- `tools` definitions are forwarded to the Ollama backend (Anthropic
+  `input_schema` is translated to the OpenAI/Ollama `parameters` shape).
+- Assistant tool calls in message history and tool results (`role:"tool"` for
+  OpenAI, `tool_result` blocks for Anthropic) are translated and forwarded.
+- Responses with tool calls return the API-native shape: `message.tool_calls`
+  with `finish_reason:"tool_calls"` (Chat Completions), `function_call` output
+  items (Responses), `tool_use` content blocks with `stop_reason:"tool_use"`
+  (Anthropic).
+- `tool_choice` is accepted and ignored. Ollama has no native tool choice; the
+  backend's default behavior applies. Requests carrying tools are scheduled at
+  tool priority.
+
+The proxy does not execute tools; clients do.
 
 ---
 

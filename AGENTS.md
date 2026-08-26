@@ -17,7 +17,7 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
 **This document does NOT contain:**
 - Code structure, component design, data flow, implementation decisions → **[ARCHITECTURE.md](ARCHITECTURE.md)**
 - API reference, product behavior, debug UI specification, UX rules → **[DESIGN.md](DESIGN.md)**
-- Active tasks, open questions, decision history, live action stream → **[CONTEXT.md](CONTEXT.md)**
+- Active/in-progress work, open questions, dated history of major changes, live action stream → **[CONTEXT.md](CONTEXT.md)**
 - Repo overview, quick start, env reference → **[README.md](README.md)**
 - Immutable change history → **`git log`**
 
@@ -32,7 +32,7 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
 | Agent operational rules, git policy, project constitution | `AGENTS.md` | Rewrites only by user request |
 | Implementation architecture, code structure, component design, data flow, design decisions | `ARCHITECTURE.md` | Rewrites on design/architecture changes |
 | Product behavior, API UX, read-only debug UI | `DESIGN.md` | Rewrites on API/UX/behavior changes |
-| Current state, active tasks, open questions, compacted decision history, live action stream | `CONTEXT.md` | Agent writes detailed present; user confirms outcomes; only resolved+confirmed entries compacted; **live stream at end of file: strictly one-line entries.** |
+| Current in-progress work, open questions, short dated history of major changes, live action stream | `CONTEXT.md` | Thin journal: present-state in-progress work + open questions + one-line-per-major-change dated history + live stream. Step-by-step detail lives in git; architectural reasoning lives in ARCHITECTURE.md. |
 | Immutable action ledger — one intent per commit | `git log` | Short, permanent. Subject = intent, body = brief validation. No file lists, no metadata trailers. |
 | Repo overview, quick start, env reference | `README.md` | Brief, kept current. Points to ARCHITECTURE.md and DESIGN.md for detail. |
 | Runtime state (data, secrets, artifacts) | volume mounts, env files | Never committed |
@@ -54,21 +54,18 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
   quick start, links to ARCHITECTURE.md and DESIGN.md, env reference.
   No architecture narrative, no API reference, no temporal state.
 
-- **CONTEXT.md**: A living, shrinkable project journal with a termination-proof
-  live stream tail.
-  **Structured sections**: Active tasks, in-progress work, open questions, recent
-  decisions, implementation notes — no compaction while unresolved.
-  **Compacted on the past**: only entries that are both resolved AND user-confirmed
-  get compressed. Recent resolved entries keep reversibility detail; older resolved
-  entries collapse to concise decision summaries. Both agent and user positions
-  are always preserved. Status words are precise: executed, implemented, resolved,
-  confirmed — not "Done" or "Fixed."
-  **Live Stream**: The `## Live Stream` section at the very end of the file is an
-  append-only action log. Each entry is strictly one line describing what was done.
-  No timestamps in stream entries — they go into the compacted structured section.
-  If the session is terminated mid-task, the next session can read the stream and
-  resume. Before committing, compact stream entries into a structured
-  section above, then clear the stream.
+- **CONTEXT.md**: A thin, shrinkable project journal.
+  **Contains only**: present-state in-progress work, open questions, a short dated
+  history of major changes (one line per change), and the live stream tail.
+  **Does not contain**: step-by-step task detail (that lives in `git log`), or
+  architectural reasoning (that lives in ARCHITECTURE.md).
+  **Compaction**: fold the live stream into the dated history at task boundaries —
+  before the next major change, before pushing when the task is done, and after any
+  big task completes. Only resolved work is compacted; in-progress entries stay in
+  the stream. Compaction is safe because git retains full step-by-step detail.
+  **Live Stream**: the `## Live Stream` section at the very end is an append-only,
+  strictly one-line-per-entry action log. If a session is terminated mid-task, the
+  next session reads the stream and resumes.
 
 - **git log**: The immutable action ledger. Each commit is one logical change —
   short, permanent, intent-driven. Subject = why. Body = what was validated, briefly.
@@ -103,23 +100,18 @@ AI agents (Claude Code, Codex, etc.) working in this repository.
    Check `ARCHITECTURE.md` for code structure and design decisions.
    Check `DESIGN.md` for API contracts and behavior specs.
 
-5. **After completing a logical task**: Structure the accumulated Live Stream
-   entries into a proper timestamped section (e.g. `## YYYY-MM-DD — Task Name`),
-   place it above the Live Stream section (before `## Open Questions`),
-   then clear the stream. Record the outcome using precise status
-   (executed, implemented, resolved). Only the user marks a task as
-   confirmed/closed. Do NOT compact the stream before the task is complete —
-   an interrupted task leaves its stream for the next agent.
+5. **After completing a logical task**: Fold the accumulated Live Stream entries
+   into the `## Major Changes` dated history (one line per major change), then
+   clear the stream. Compact at task boundaries — before the next major change,
+   before pushing when the task is done, and after any big task completes.
+   Do NOT compact the stream before the task is complete — an interrupted task
+   leaves its stream for the next agent.
 
-6. **CONTEXT.md compaction**: Only compact entries that are both resolved AND
-   user-confirmed. Active, in-progress, and executed-but-unconfirmed entries
-   stay detailed — no compaction. When compacting:
-   - Recently resolved: preserve enough detail to reverse the decision if needed.
-   - Older resolved: aggressive summarization — e.g. a multi-step investigation
-     compresses to "user decided: use X approach for Y."
-   - Always keep both agent and user positions in the entry.
-   - Use precise status words: executed, implemented, resolved, confirmed —
-     avoid generic "Done" or "Fixed".
+6. **CONTEXT.md compaction**: Compaction collapses resolved work into one-line
+   dated history entries — the full step-by-step detail is preserved in `git log`,
+   so reversibility does not depend on CONTEXT.md. In-progress and unresolved
+   entries stay in the stream, un-compacted. Use precise status words
+   (executed, implemented, resolved, confirmed) — avoid generic "Done" or "Fixed".
 
 7. **Commit style**: One logical change per commit. Subject = intent (short).
    Body = brief validation result. The commit is a permanent ledger entry,
