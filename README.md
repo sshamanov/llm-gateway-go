@@ -1,4 +1,4 @@
-# LLM Go Proxy
+# LLM Gateway (Go)
 
 Go-based proxy server for LLM API backends. Exposes OpenAI-compatible and Anthropic-compatible
 APIs while routing inference through native Ollama backends.
