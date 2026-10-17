@@ -56,6 +56,19 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Flush delegates to the wrapped writer so SSE handlers behind this
+// middleware can stream incrementally.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the wrapped writer to http.ResponseController.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // LoggingMiddleware logs information about each completed HTTP request:
 // method, path, status code, duration, and request ID. The request ID is
 // read from the X-Request-Id response header, which is set by the inner

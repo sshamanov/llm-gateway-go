@@ -69,3 +69,29 @@ func TestLoggingMiddlewareWrites(t *testing.T) {
 		t.Error("missing request_id field in log entry")
 	}
 }
+
+// TestLoggingMiddlewarePreservesFlusher verifies that SSE handlers behind
+// LoggingMiddleware can still flush incrementally.
+func TestLoggingMiddlewarePreservesFlusher(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger(logging.LevelInfo, "test")
+	var discard bytes.Buffer
+	logger.SetOutput(&discard, &discard)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("wrapped writer does not implement http.Flusher")
+			return
+		}
+		w.Write([]byte("data: x\n\n"))
+		f.Flush()
+	})
+
+	rec := httptest.NewRecorder()
+	httpapi.LoggingMiddleware(logger, inner).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !rec.Flushed {
+		t.Error("expected underlying recorder to be flushed")
+	}
+}

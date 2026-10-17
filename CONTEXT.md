@@ -39,8 +39,10 @@ Last updated: 2026-08-26
   tool results in history, and map tool-call responses back to each API's native shape, in both
   streaming and non-streaming mode. Requests carrying tools schedule at tool priority;
   `tool_choice` is accepted and ignored. Verified with full go test + go vet in golang:1.22.
+- **2026-08-26 — Streaming tool_calls finish_reason**: Chat Completions streams now report
+  finish_reason "tool_calls" when Ollama sends tool calls before the done chunk; live E2E on qwen3.6:35b.
 
 ## Live Stream
 
-- Live E2E against qwen3.6:35b (backend 5950): tool calling confirmed on all three APIs, non-streaming + streaming. Found + fixed streaming bug: Chat Completions finish_reason was "stop" on tool-call streams (Ollama sends tool_calls in a separate chunk from done); now "tool_calls" via stream-level tracking. Test updated to model real chunking.
-
+- Task: fix /code-review findings (SSE flush, double lease release, PDF panic, protocol events, Responses input, queue leaks, alias options, image timeout, gofmt).
+- Implemented Flush/Unwrap on logging statusRecorder so SSE streams flush through middleware; httpapi tests pass.
