@@ -671,11 +671,6 @@ func handleStreamAnthropic(
 	think *bool,
 	tools json.RawMessage,
 ) {
-	// Set SSE headers.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
 
 	// Create a cancellable context derived from the request context.
 	streamCtx, cancelStream := context.WithCancel(r.Context())
@@ -715,15 +710,16 @@ func handleStreamAnthropic(
 
 	// Submit to scheduler.
 	if err := sched.Submit(job); err != nil {
-		writeAnthropicSSEEvent(w, "error", anthropicErrorResponse{
-			Type: "error",
-			Error: anthropicErrorDetail{
-				Type:    "api_error",
-				Message: "Queue full: " + err.Error(),
-			},
-		})
+		writeAnthropicError(w, http.StatusServiceUnavailable, "api_error", "Queue full: "+err.Error())
 		return
 	}
+
+	// SSE headers are sent only once the job is queued, so queue-full is a
+	// real 503 the client can retry.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
 
 	// Cancel the stream context when the client disconnects.
 	go func() {

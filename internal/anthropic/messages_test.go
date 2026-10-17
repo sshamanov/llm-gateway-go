@@ -722,6 +722,67 @@ func TestMessages_QueueFull(t *testing.T) {
 	}
 }
 
+// TestMessages_Streaming_QueueFull verifies streaming requests get a real
+// 503 when the queue is full, before any SSE headers are sent.
+func TestMessages_Streaming_QueueFull(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{
+		ExposeNativeOllamaModels: false,
+		Aliases: []config.AliasConfig{{
+			Name:         "test-alias",
+			PrimaryModel: "some-model",
+		}},
+	}
+	cfg.Scheduler.QueueMaxPending = 0
+
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+
+	hosts := scheduler.NewHostLeaseManager(cfg.Hosts)
+	backends := scheduler.NewBackendLeaseManager(cfg.OllamaBackends)
+	stats := scheduler.NewStatsTracker()
+	scorer := scheduler.NewScorer(stats, hosts, backends, cfg.Scheduler)
+	sched := scheduler.NewScheduler(
+		scheduler.NewQueue(cfg.Scheduler.AgingPerSecond),
+		scorer,
+		stats,
+		http.DefaultClient,
+		nil,
+		nil,
+		nil,
+		func() []backend.BackendSnapshot { return nil },
+	)
+
+	handler := MessagesHandler(logger, reg, sched)
+	handlerTS := httptest.NewServer(handler)
+	defer handlerTS.Close()
+
+	body := `{"model":"test-alias","messages":[{"role":"user","content":"Hi"}],"max_tokens":100,"stream":true}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+
+	var errResp anthropicErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatal(err)
+	}
+	if errResp.Type != "error" {
+		t.Errorf("expected Type 'error', got %q", errResp.Type)
+	}
+	if errResp.Error.Type != "api_error" {
+		t.Errorf("expected Error.Type 'api_error', got %q", errResp.Error.Type)
+	}
+	if !strings.Contains(errResp.Error.Message, "Queue full") {
+		t.Errorf("expected message to contain 'Queue full', got %q", errResp.Error.Message)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests for conversion functions
 // ---------------------------------------------------------------------------

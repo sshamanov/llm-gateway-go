@@ -529,7 +529,8 @@ The model may still be available on other backends.
 
 Client response:
 
-- clean overload error
+- clean overload error: HTTP 503 with a JSON error body, for streaming
+  requests too (the SSE stream starts only after the job is queued)
 - do not crash
 - do not accept more payloads than can be tracked
 

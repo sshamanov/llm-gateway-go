@@ -597,11 +597,6 @@ func handleStreamResponses(
 	options *ollama.ChatOptions,
 	tools json.RawMessage,
 ) {
-	// Step 1: Set SSE headers.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
 
 	// Step 2: Create a cancellable context derived from the request context.
 	streamCtx, cancelStream := context.WithCancel(r.Context())
@@ -642,13 +637,16 @@ func handleStreamResponses(
 
 	// Step 5: Submit to scheduler.
 	if err := sched.Submit(job); err != nil {
-		errJSON := fmt.Sprintf(`{"error":{"message":"Queue full: %s","type":"server_error","code":"queue_full"}}`, err.Error())
-		fmt.Fprintf(w, "data: %s\n\n", errJSON)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
+		writeJSONError(w, http.StatusServiceUnavailable, "Queue full: "+err.Error(), "server_error", "queue_full")
 		return
 	}
+
+	// SSE headers are sent only once the job is queued, so queue-full is a
+	// real 503 the client can retry.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
 
 	// Step 6: Cancel the stream context when the client disconnects.
 	go func() {

@@ -932,24 +932,17 @@ func TestResponses_Streaming_QueueFull(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// SSE headers are written before the submit attempt, so status is 200.
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 (SSE headers already sent), got %d", resp.StatusCode)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Errorf("expected Content-Type 'text/event-stream', got %q", ct)
+	// SSE headers are only sent after the job is queued, so queue-full is 503.
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if !strings.Contains(string(respBody), "data:") {
-		t.Error("expected SSE data event in body")
-	}
 	if !strings.Contains(string(respBody), `"code":"queue_full"`) {
-		t.Errorf("expected queue_full error in SSE body, got: %s", string(respBody))
+		t.Errorf("expected queue_full error in body, got: %s", string(respBody))
 	}
 }
 
