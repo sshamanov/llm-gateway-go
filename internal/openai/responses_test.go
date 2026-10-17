@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -435,8 +436,11 @@ func TestResponses_Streaming(t *testing.T) {
 	if !strings.Contains(string(respBody), "data:") {
 		t.Error("expected SSE data events in response body")
 	}
-	if !strings.Contains(string(respBody), "[DONE]") {
-		t.Error("expected [DONE] marker in response body")
+	if strings.Contains(string(respBody), "[DONE]") {
+		t.Error("unexpected non-protocol [DONE] marker in response body")
+	}
+	if !strings.Contains(string(respBody), `"type":"response.completed"`) {
+		t.Error("expected response.completed event in response body")
 	}
 	if !strings.Contains(string(respBody), "response.output_text.delta") {
 		t.Error("expected response.output_text.delta event in response body")
@@ -524,8 +528,11 @@ func TestResponses_Streaming_Works(t *testing.T) {
 	if !strings.Contains(string(respBody), "data:") {
 		t.Error("expected SSE data events in response body")
 	}
-	if !strings.Contains(string(respBody), "[DONE]") {
-		t.Error("expected [DONE] marker in response body")
+	if strings.Contains(string(respBody), "[DONE]") {
+		t.Error("unexpected non-protocol [DONE] marker in response body")
+	}
+	if !strings.Contains(string(respBody), `"type":"response.completed"`) {
+		t.Error("expected response.completed event in response body")
 	}
 	if !strings.Contains(string(respBody), "Array streaming works.") {
 		t.Error("expected streaming response content in response body")
@@ -1108,14 +1115,18 @@ func TestResponses_Streaming_ClientDisconnect(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Read first SSE event to confirm streaming started.
+	// Read until the first text delta so the backend request is in flight
+	// (response.created is sent before dispatch).
 	scanner := bufio.NewScanner(resp.Body)
-	if !scanner.Scan() {
-		t.Fatal("expected at least one SSE event")
+	sawDelta := false
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "event: response.output_text.delta") {
+			sawDelta = true
+			break
+		}
 	}
-	firstLine := scanner.Text()
-	if !strings.HasPrefix(firstLine, "data:") {
-		t.Errorf("expected SSE data event, got %q", firstLine)
+	if !sawDelta {
+		t.Fatal("expected a response.output_text.delta event")
 	}
 
 	// Client disconnect: close the response body.
@@ -1331,7 +1342,65 @@ func TestResponses_Streaming_ToolCall(t *testing.T) {
 	if !strings.Contains(sse, `"get_weather"`) {
 		t.Errorf("expected function name get_weather in SSE stream")
 	}
-	if !strings.Contains(sse, "[DONE]") {
-		t.Errorf("expected [DONE] marker")
+	if strings.Contains(sse, "[DONE]") {
+		t.Errorf("unexpected non-protocol [DONE] marker")
+	}
+	if !strings.Contains(sse, `"type":"response.function_call_arguments.done"`) {
+		t.Errorf("expected function_call_arguments.done event")
+	}
+}
+
+// TestResponsesStream_EventSequence checks the emitted lifecycle for a text
+// item followed by a function call against the Responses streaming protocol.
+func TestResponsesStream_EventSequence(t *testing.T) {
+	var buf bytes.Buffer
+	st := newResponsesStream(&buf, "resp_abc", "m")
+	st.Start()
+	st.Text("Hel")
+	st.Text("lo")
+	st.ToolCall(ollama.ChatToolCall{Function: ollama.ChatToolCallFunction{Name: "f", Arguments: json.RawMessage(`{"a":1}`)}})
+	st.Complete(&ollama.ChatResponse{Done: true, PromptEvalCount: 3, EvalCount: 4})
+
+	var types []string
+	var completed map[string]interface{}
+	for i, line := range strings.Split(buf.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev map[string]interface{}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+			t.Fatalf("line %d not JSON: %v", i, err)
+		}
+		if int(ev["sequence_number"].(float64)) != len(types) {
+			t.Errorf("sequence_number %v at position %d", ev["sequence_number"], len(types))
+		}
+		types = append(types, ev["type"].(string))
+		if ev["type"] == "response.completed" {
+			completed = ev["response"].(map[string]interface{})
+		}
+	}
+	want := []string{
+		"response.created", "response.in_progress",
+		"response.output_item.added", "response.content_part.added",
+		"response.output_text.delta", "response.output_text.delta",
+		"response.output_text.done", "response.content_part.done", "response.output_item.done",
+		"response.output_item.added", "response.function_call_arguments.delta",
+		"response.function_call_arguments.done", "response.output_item.done",
+		"response.completed",
+	}
+	if strings.Join(types, ",") != strings.Join(want, ",") {
+		t.Fatalf("event types:\n got %v\nwant %v", types, want)
+	}
+	if completed["status"] != "completed" {
+		t.Errorf("completed status = %v", completed["status"])
+	}
+	output := completed["output"].([]interface{})
+	if len(output) != 2 {
+		t.Fatalf("completed output has %d items, want 2", len(output))
+	}
+	msg := output[0].(map[string]interface{})
+	text := msg["content"].([]interface{})[0].(map[string]interface{})["text"]
+	if text != "Hello" {
+		t.Errorf("final text = %v, want Hello", text)
 	}
 }

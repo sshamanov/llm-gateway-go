@@ -53,3 +53,4 @@ Last updated: 2026-08-26
 - Resolved image gen hang: SendGeneration takes ctx; handler uses request ctx with 10-min ceiling; cancel test passes.
 - Resolved Anthropic stream protocol: message_start first, no [DONE], text block closed before tool_use, explicit empty text/input in block starts, error event on truncated stream; strict event-order test added.
 - Resolved Responses input parsing: string content in array items, output_text/text blocks, input_image image_url data URLs, non-message items skipped; tests added.
+- Resolved Responses stream protocol: created/in_progress, message item + content_part lifecycle, function_call_arguments.done, response.completed/failed with sequence_number; no [DONE]; sequence test added.

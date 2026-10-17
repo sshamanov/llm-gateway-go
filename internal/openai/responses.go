@@ -660,10 +660,12 @@ func handleStreamResponses(
 		}
 	}()
 
-	// Step 7: Generate the response ID (shared across all SSE events for this response).
-	respID := generateResponseID()
+	// Step 7: Stream events under one response ID.
+	stream := newResponsesStream(w, generateResponseID(), requestedModel)
+	stream.Start()
 
 	// Step 8: Read chunks from the scheduler's stream channel.
+	completed := false
 	for chunk := range job.StreamCh {
 		if chunk == nil {
 			continue
@@ -682,86 +684,25 @@ func handleStreamResponses(
 		}
 
 		resp := chunk.Response
-		delta := resp.Message.Content
-
-		// Write delta event for content chunks.
-		if delta != "" {
-			if err := writeSSEResponseEvent(w, sseResponseEvent{
-				Type:        "response.output_text.delta",
-				Delta:       delta,
-				ItemID:      respID + "_item_0",
-				OutputIndex: 0,
-				ContentIdx:  0,
-			}); err != nil {
-				// Client probably disconnected — cancel the backend.
-				cancelStream()
-				return
-			}
+		stream.Text(resp.Message.Content)
+		for _, tc := range resp.Message.ToolCalls {
+			stream.ToolCall(tc)
 		}
-
-		// Write function_call output item events for chunks carrying tool_calls.
-		// Ollama delivers a complete tool call in a single chunk, so the whole
-		// item is emitted at once.
-		if toolCalls := resp.Message.ToolCalls; len(toolCalls) > 0 {
-			for i, tc := range toolCalls {
-				args := string(tc.Function.Arguments)
-				if args == "" || args == "null" {
-					args = "{}"
-				}
-				callID := newToolCallID()
-				item := responsesOutput{
-					Type:      "function_call",
-					ID:        callID,
-					CallID:    callID,
-					Name:      tc.Function.Name,
-					Arguments: args,
-					Status:    "completed",
-				}
-				if err := writeSSEResponseEvent(w, sseResponseEvent{
-					Type:        "response.output_item.added",
-					OutputIndex: i,
-					ItemID:      callID,
-					Item:        &item,
-				}); err != nil {
-					cancelStream()
-					return
-				}
-				if err := writeSSEResponseEvent(w, sseResponseEvent{
-					Type:        "response.function_call_arguments.delta",
-					OutputIndex: i,
-					ItemID:      callID,
-					Delta:       args,
-				}); err != nil {
-					cancelStream()
-					return
-				}
-				if err := writeSSEResponseEvent(w, sseResponseEvent{
-					Type:        "response.output_item.done",
-					OutputIndex: i,
-					ItemID:      callID,
-					Item:        &item,
-				}); err != nil {
-					cancelStream()
-					return
-				}
-			}
-		}
-
-		// Write done event for the final chunk.
 		if resp.Done {
-			fullResp := mapResponsesResponse(resp, requestedModel)
-			if err := writeSSEResponseEvent(w, sseResponseEvent{
-				Type:     "response.done",
-				Response: &fullResp,
-			}); err != nil {
-				cancelStream()
-				return
-			}
+			stream.Complete(resp)
+			completed = true
+		}
+		if stream.Err() != nil {
+			// Client probably disconnected — cancel the backend.
+			cancelStream()
+			return
 		}
 	}
 
-	// Step 9: Write [DONE] marker.
-	writeSSEDone(w)
+	// Step 9: A stream that ends without a done chunk failed mid-way.
+	if !completed {
+		stream.Fail("backend stream ended before completion")
+	}
 
 	// Step 10: Non-blocking read from ResultChan for logging.
 	select {
