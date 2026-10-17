@@ -2,6 +2,7 @@ package image
 
 import (
     "bytes"
+    "context"
     "encoding/json"
     "fmt"
     "io"
@@ -44,15 +45,16 @@ type GenerationError struct {
 // SendGeneration POSTs a generation request to an image backend and returns the
 // response. baseURL should be the root URL (e.g. "http://127.0.0.1:8080/v1").
 // The request is sent to {baseURL}/images/generations. If apiKey is non-empty,
-// the request carries "Authorization: Bearer <apiKey>".
-func SendGeneration(client *http.Client, baseURL, apiKey string, req *GenerationRequest) (*GenerationResponse, error) {
+// the request carries "Authorization: Bearer <apiKey>". Cancelling ctx aborts
+// the backend request.
+func SendGeneration(ctx context.Context, client *http.Client, baseURL, apiKey string, req *GenerationRequest) (*GenerationResponse, error) {
     body, err := json.Marshal(req)
     if err != nil {
         return nil, fmt.Errorf("image gen: marshal request: %w", err)
     }
 
     url := baseURL + "/images/generations"
-    httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+    httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
     if err != nil {
         return nil, fmt.Errorf("image gen: create request: %w", err)
     }

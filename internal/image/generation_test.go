@@ -1,11 +1,13 @@
 package image
 
 import (
+    "context"
     "encoding/json"
     "net/http"
     "net/http/httptest"
     "strings"
     "testing"
+    "time"
 )
 
 func TestSendGeneration_Success(t *testing.T) {
@@ -50,7 +52,7 @@ func TestSendGeneration_Success(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
+    result, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{
         Prompt: "a cat",
         N:      1,
         Size:   "1024x1024",
@@ -101,7 +103,7 @@ func TestSendGeneration_MultipleImages(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
+    result, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{
         Prompt: "two dogs",
         N:      2,
     })
@@ -134,7 +136,7 @@ func TestSendGeneration_Error(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -156,7 +158,7 @@ func TestSendGeneration_ErrorWithoutBody(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -174,7 +176,7 @@ func TestSendGeneration_InvalidJSON(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
     }
@@ -186,9 +188,29 @@ func TestSendGeneration_Unreachable(t *testing.T) {
     }))
     server.Close()
 
-    _, err := SendGeneration(http.DefaultClient, server.URL, "", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), http.DefaultClient, server.URL, "", &GenerationRequest{Prompt: "test"})
     if err == nil {
         t.Fatal("expected error, got nil")
+    }
+}
+
+func TestSendGeneration_ContextCancel(t *testing.T) {
+    release := make(chan struct{})
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        <-release
+    }))
+    defer server.Close()
+    defer close(release)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+    defer cancel()
+    start := time.Now()
+    _, err := SendGeneration(ctx, server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    if err == nil {
+        t.Fatal("expected error after context deadline")
+    }
+    if time.Since(start) > 2*time.Second {
+        t.Fatal("request did not abort on context deadline")
     }
 }
 
@@ -209,7 +231,7 @@ func TestSendGeneration_TrailingSlash(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL+"/", "", &GenerationRequest{Prompt: "test"})
+    result, err := SendGeneration(context.Background(), server.Client(), server.URL+"/", "", &GenerationRequest{Prompt: "test"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -238,7 +260,7 @@ func TestSendGeneration_SetsAuthHeader(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, "sk-test-key", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), server.Client(), server.URL, "sk-test-key", &GenerationRequest{Prompt: "test"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -257,7 +279,7 @@ func TestSendGeneration_EmptyKeyOmitsAuthHeader(t *testing.T) {
     }))
     defer server.Close()
 
-    _, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
+    _, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{Prompt: "test"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -283,7 +305,7 @@ func TestSendGeneration_B64JSON(t *testing.T) {
     }))
     defer server.Close()
 
-    result, err := SendGeneration(server.Client(), server.URL, "", &GenerationRequest{
+    result, err := SendGeneration(context.Background(), server.Client(), server.URL, "", &GenerationRequest{
         Prompt:         "test",
         ResponseFormat: "b64_json",
     })

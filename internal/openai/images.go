@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,10 @@ import (
 )
 
 const maxImgReqBodySize = 1 * 1024 * 1024 // 1MB
+
+// imageGenerationTimeout bounds one backend image call so a hung backend
+// cannot hold host and backend leases indefinitely.
+const imageGenerationTimeout = 10 * time.Minute
 
 // imgErrorResponse is the OpenAI-compatible error envelope for image endpoints.
 type imgErrorResponse struct {
@@ -145,7 +150,9 @@ func ImagesGenerationsHandler(
 		}
 
 		// Step 9: Call image.SendGeneration.
-		genResp, err := image.SendGeneration(http.DefaultClient, selectedBackend.URL, selectedBackend.APIKey, genReq)
+		genCtx, cancelGen := context.WithTimeout(r.Context(), imageGenerationTimeout)
+		defer cancelGen()
+		genResp, err := image.SendGeneration(genCtx, http.DefaultClient, selectedBackend.URL, selectedBackend.APIKey, genReq)
 		if err != nil {
 			if logger != nil {
 				logger.Error("image generation failed",
