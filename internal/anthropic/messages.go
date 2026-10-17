@@ -734,10 +734,34 @@ func handleStreamAnthropic(
 		}
 	}()
 
-	sentStart := false
+	// message_start must precede every content block.
+	writeAnthropicSSEEvent(w, "message_start", sseMessageStart{
+		Type: "message_start",
+		Message: anthropicStreamEnvelope{
+			ID:      generateAnthropicID(),
+			Type:    "message",
+			Role:    "assistant",
+			Content: []anthropicResponseBlock{},
+			Model:   requestedModel,
+		},
+	})
+
+	textOpen := false
 	sawToolCalls := false
+	sawDone := false
 	blockIndex := 0
 	textIndex := 0
+
+	// closeText ends the open text block so blocks stay sequential.
+	closeText := func() {
+		if textOpen {
+			writeAnthropicSSEEvent(w, "content_block_stop", sseContentBlockStop{
+				Type:  "content_block_stop",
+				Index: textIndex,
+			})
+			textOpen = false
+		}
+	}
 
 	// Read chunks from the scheduler's stream channel.
 	for chunk := range job.StreamCh {
@@ -766,6 +790,7 @@ func handleStreamAnthropic(
 		// stop.
 		if len(toolCalls) > 0 {
 			sawToolCalls = true
+			closeText()
 			for _, tc := range toolCalls {
 				index := blockIndex
 				blockIndex++
@@ -774,12 +799,12 @@ func handleStreamAnthropic(
 				writeAnthropicSSEEvent(w, "content_block_start", sseContentBlockStart{
 					Type:  "content_block_start",
 					Index: index,
-					ContentBlock: anthropicResponseBlock{
+					ContentBlock: mustRaw(toolUseBlockStart{
 						Type:  "tool_use",
 						ID:    newAnthropicToolUseID(),
 						Name:  tc.Function.Name,
-						Input: args,
-					},
+						Input: json.RawMessage(`{}`),
+					}),
 				})
 
 				delta, err := json.Marshal(anthropicToolUseDelta{
@@ -809,19 +834,15 @@ func handleStreamAnthropic(
 
 		// Emit content block events for non-empty content.
 		if content != "" {
-			if !sentStart {
-				// First content chunk: emit content_block_start (empty text) then
-				// content_block_delta with the actual text.
+			if !textOpen {
+				// Open a text block (empty text) before the first delta.
 				textIndex = blockIndex
 				blockIndex++
-				sentStart = true
+				textOpen = true
 				writeAnthropicSSEEvent(w, "content_block_start", sseContentBlockStart{
-					Type:  "content_block_start",
-					Index: textIndex,
-					ContentBlock: anthropicResponseBlock{
-						Type: "text",
-						Text: "",
-					},
+					Type:         "content_block_start",
+					Index:        textIndex,
+					ContentBlock: mustRaw(textBlockStart{Type: "text", Text: ""}),
 				})
 			}
 
@@ -840,12 +861,8 @@ func handleStreamAnthropic(
 
 		// Handle done events.
 		if resp.Done {
-			if sentStart {
-				writeAnthropicSSEEvent(w, "content_block_stop", sseContentBlockStop{
-					Type:  "content_block_stop",
-					Index: textIndex,
-				})
-			}
+			sawDone = true
+			closeText()
 
 			stopReason := mapStopReason(resp.DoneReason)
 			if sawToolCalls {
@@ -869,8 +886,18 @@ func handleStreamAnthropic(
 		}
 	}
 
-	// Write [DONE] marker.
-	writeAnthropicSSEDone(w)
+	// A stream that ends without a done chunk failed mid-way; tell the client
+	// with an error event instead of leaving the message unterminated.
+	if !sawDone {
+		closeText()
+		writeAnthropicSSEEvent(w, "error", anthropicErrorResponse{
+			Type: "error",
+			Error: anthropicErrorDetail{
+				Type:    "api_error",
+				Message: "backend stream ended before completion",
+			},
+		})
+	}
 
 	// Non-blocking read from ResultChan for logging.
 	select {

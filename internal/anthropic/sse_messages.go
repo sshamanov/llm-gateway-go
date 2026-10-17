@@ -7,11 +7,48 @@ import (
 	"net/http"
 )
 
-// sseContentBlockStart is the first event in an Anthropic streaming response.
+// sseMessageStart is the first event in an Anthropic streaming response. It
+// carries the message envelope with empty content.
+type sseMessageStart struct {
+	Type    string                   `json:"type"` // "message_start"
+	Message anthropicStreamEnvelope `json:"message"`
+}
+
+// anthropicStreamEnvelope is the message object inside message_start. Unlike
+// the non-streaming response, stop_reason is explicitly null.
+type anthropicStreamEnvelope struct {
+	ID           string                   `json:"id"`
+	Type         string                   `json:"type"` // "message"
+	Role         string                   `json:"role"` // "assistant"
+	Content      []anthropicResponseBlock `json:"content"`
+	Model        string                   `json:"model"`
+	StopReason   *string                  `json:"stop_reason"`
+	StopSequence *string                  `json:"stop_sequence"`
+	Usage        anthropicUsage           `json:"usage"`
+}
+
+// sseContentBlockStart opens a content block. ContentBlock is a raw object so
+// a text block can carry an explicit empty "text" and a tool_use block an
+// empty "input", which SDK accumulators require.
 type sseContentBlockStart struct {
-	Type         string                `json:"type"`          // "content_block_start"
-	Index        int                   `json:"index"`
-	ContentBlock anthropicResponseBlock `json:"content_block"`
+	Type         string          `json:"type"` // "content_block_start"
+	Index        int             `json:"index"`
+	ContentBlock json.RawMessage `json:"content_block"`
+}
+
+// textBlockStart is the content_block for a text block start.
+type textBlockStart struct {
+	Type string `json:"type"` // "text"
+	Text string `json:"text"`
+}
+
+// toolUseBlockStart is the content_block for a tool_use block start; the
+// arguments follow as input_json_delta.
+type toolUseBlockStart struct {
+	Type  string          `json:"type"` // "tool_use"
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 // sseContentBlockDelta carries a delta for the current content block. Delta is a
@@ -54,7 +91,7 @@ type anthropicStopDelta struct {
 	StopSequence *string `json:"stop_sequence,omitempty"`
 }
 
-// sseMessageStop is the terminal event before [DONE].
+// sseMessageStop is the terminal event of a stream.
 type sseMessageStop struct {
 	Type string `json:"type"` // "message_stop"
 }
@@ -79,13 +116,9 @@ func writeAnthropicSSEEvent(w io.Writer, eventType string, data interface{}) err
 	return nil
 }
 
-// writeAnthropicSSEDone writes the terminal [DONE] marker and flushes.
-func writeAnthropicSSEDone(w io.Writer) error {
-	if _, err := fmt.Fprintf(w, "data: [DONE]\n\n"); err != nil {
-		return fmt.Errorf("sse anthropic: done: %w", err)
-	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return nil
+// mustRaw marshals v for embedding as a json.RawMessage. The inputs are
+// fixed local structs, so marshalling cannot fail in practice.
+func mustRaw(v interface{}) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
 }

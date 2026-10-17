@@ -564,8 +564,11 @@ func TestMessages_Streaming(t *testing.T) {
 	if !strings.Contains(bodyStr, "message_stop") {
 		t.Error("expected message_stop event")
 	}
-	if !strings.Contains(bodyStr, "[DONE]") {
-		t.Error("expected [DONE] marker")
+	if strings.Contains(bodyStr, "[DONE]") {
+		t.Error("unexpected non-protocol [DONE] marker")
+	}
+	if !strings.HasPrefix(bodyStr, "event: message_start\n") {
+		t.Error("expected message_start as the first event")
 	}
 
 	// Verify content is present in delta events.
@@ -635,14 +638,18 @@ func TestMessages_StreamingClientDisconnect(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Read first SSE event to confirm streaming started.
+	// Read until the first content delta so the backend request is in
+	// flight (message_start is sent before dispatch).
 	scanner := bufio.NewScanner(resp.Body)
-	if !scanner.Scan() {
-		t.Fatal("expected at least one SSE event")
+	sawDelta := false
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "event: content_block_delta") {
+			sawDelta = true
+			break
+		}
 	}
-	firstLine := scanner.Text()
-	if !strings.HasPrefix(firstLine, "event:") && !strings.HasPrefix(firstLine, "data:") {
-		t.Errorf("expected SSE event line, got %q", firstLine)
+	if !sawDelta {
+		t.Fatal("expected a content_block_delta event")
 	}
 
 	// Client disconnect: close the response body.
@@ -1432,7 +1439,7 @@ func TestMessages_Streaming_ToolUse(t *testing.T) {
 	if !strings.Contains(bodyStr, `"input_json_delta"`) {
 		t.Error("expected input_json_delta event")
 	}
-	if !strings.Contains(bodyStr, `{"location":"SF"}`) {
+	if !strings.Contains(bodyStr, `"partial_json":"{\"location\":\"SF\"}"`) {
 		t.Error("expected tool input JSON in delta")
 	}
 	if !strings.Contains(bodyStr, `"stop_reason":"tool_use"`) {
@@ -1441,7 +1448,95 @@ func TestMessages_Streaming_ToolUse(t *testing.T) {
 	if !strings.Contains(bodyStr, "content_block_stop") {
 		t.Error("expected content_block_stop event")
 	}
-	if !strings.Contains(bodyStr, "[DONE]") {
-		t.Error("expected [DONE] marker")
+	if strings.Contains(bodyStr, "[DONE]") {
+		t.Error("unexpected non-protocol [DONE] marker")
+	}
+	if !strings.HasPrefix(bodyStr, "event: message_start\n") {
+		t.Error("expected message_start as the first event")
+	}
+}
+
+// TestMessages_Streaming_EventOrder verifies the SSE sequence follows the
+// Anthropic protocol when text precedes a tool call: message_start first,
+// each block closed before the next opens, message_stop last.
+func TestMessages_Streaming_EventOrder(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			fmt.Fprintf(w, `{"model":"model-b","message":{"role":"assistant","content":"Checking."},"done":false}`+"\n")
+			fmt.Fprintf(w, `{"model":"model-b","message":{"role":"assistant","tool_calls":[{"function":{"name":"get_weather","arguments":{"location":"SF"}}}]},"done":false}`+"\n")
+			fmt.Fprintf(w, `{"model":"model-b","message":{"role":"assistant","content":""},"done":true,"total_duration":1000000000,"eval_count":5}`+"\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/api/tags") {
+			json.NewEncoder(w).Encode(ollama.TagsResponse{Models: []ollama.TagsModel{{Name: "model-b"}}})
+			return
+		}
+		json.NewEncoder(w).Encode(ollama.PSResponse{Models: []ollama.PSModel{}})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Models = config.ModelsConfig{Aliases: []config.AliasConfig{{Name: "my-alias", PrimaryModel: "model-b"}}}
+	cfg.OllamaBackends = []config.OllamaBackendConfig{
+		{ID: "test-backend", URL: ts.URL, Host: "default", Enabled: true, MaxConcurrentRequests: 1},
+	}
+	logger := newDiscardLogger()
+	reg := backend.NewRegistry(&cfg, logger)
+	reg.Start()
+	defer reg.Stop()
+	time.Sleep(200 * time.Millisecond)
+	sched := newTestScheduler(t, &cfg, reg, map[string]string{"test-backend": ts.URL})
+	sched.Start()
+	defer sched.Stop()
+	handlerTS := httptest.NewServer(MessagesHandler(logger, reg, sched))
+	defer handlerTS.Close()
+
+	body := `{"model":"my-alias","messages":[{"role":"user","content":"Weather?"}],"max_tokens":100,"stream":true,"tools":[{"name":"get_weather","input_schema":{"type":"object"}}]}`
+	resp, err := http.Post(handlerTS.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+
+	var events []string
+	open := -1
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev struct {
+			Type         string          `json:"type"`
+			Index        int             `json:"index"`
+			ContentBlock json.RawMessage `json:"content_block"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+			t.Fatalf("non-JSON data line %q: %v", line, err)
+		}
+		events = append(events, ev.Type)
+		switch ev.Type {
+		case "content_block_start":
+			if open != -1 {
+				t.Fatalf("block %d started while block %d still open", ev.Index, open)
+			}
+			open = ev.Index
+			if strings.Contains(string(ev.ContentBlock), `"type":"text"`) && !strings.Contains(string(ev.ContentBlock), `"text":""`) {
+				t.Errorf("text block start missing empty text field: %s", ev.ContentBlock)
+			}
+		case "content_block_delta":
+			if ev.Index != open {
+				t.Fatalf("delta for block %d while block %d open", ev.Index, open)
+			}
+		case "content_block_stop":
+			if ev.Index != open {
+				t.Fatalf("stop for block %d while block %d open", ev.Index, open)
+			}
+			open = -1
+		}
+	}
+	if len(events) == 0 || events[0] != "message_start" || events[len(events)-1] != "message_stop" {
+		t.Fatalf("event sequence = %v, want message_start ... message_stop", events)
 	}
 }
