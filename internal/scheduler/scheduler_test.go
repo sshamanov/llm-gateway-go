@@ -580,3 +580,14 @@ func TestScheduler_ReapsCancelledPendingJob(t *testing.T) {
 		t.Errorf("job state = %v, want aborted", job.State)
 	}
 }
+
+func TestComputeTPS_PrefersEvalDuration(t *testing.T) {
+	resp := &ollama.ChatResponse{EvalCount: 100, EvalDuration: 2e9, TotalDuration: 10e9}
+	if got := computeTPS(resp); got != 50 {
+		t.Errorf("computeTPS = %v, want 50 (eval_count / eval_duration)", got)
+	}
+	resp = &ollama.ChatResponse{EvalCount: 100, TotalDuration: 4e9}
+	if got := computeTPS(resp); got != 25 {
+		t.Errorf("computeTPS without eval_duration = %v, want 25", got)
+	}
+}

@@ -100,5 +100,6 @@ type ChatResponse struct {
 	LoadDuration       int64  `json:"load_duration,omitempty"`
 	PromptEvalCount    int    `json:"prompt_eval_count,omitempty"`
 	EvalCount          int    `json:"eval_count,omitempty"`
+	EvalDuration       int64  `json:"eval_duration,omitempty"`
 	DoneReason         string `json:"done_reason,omitempty"`
 }

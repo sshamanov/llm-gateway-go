@@ -700,11 +700,17 @@ func (s *Scheduler) mergeBackendOptions(req *ollama.ChatRequest, backendID strin
 	}
 }
 
-// computeTPS estimates tokens per second from a ChatResponse.
-// Uses EvalCount and TotalDuration when available; falls back to 5.0.
+// computeTPS estimates generation tokens per second from a ChatResponse.
+// Uses EvalDuration (generation only) when present, since TotalDuration also
+// includes model load and prompt evaluation; falls back to TotalDuration for
+// backends that omit it, then to 5.0.
 func computeTPS(resp *ollama.ChatResponse) float64 {
 	if resp.EvalCount > 0 {
-		totalSeconds := float64(resp.TotalDuration) / 1e9
+		duration := resp.EvalDuration
+		if duration <= 0 {
+			duration = resp.TotalDuration
+		}
+		totalSeconds := float64(duration) / 1e9
 		if totalSeconds > 0.001 {
 			return float64(resp.EvalCount) / totalSeconds
 		}
