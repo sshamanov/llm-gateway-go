@@ -94,7 +94,11 @@ type PrepareTask struct {
 	FileType       FileType
 	Mode           Mode
 	HasVisionModel bool
-	ResultCh       chan *PrepareResult
+	// WorkDir holds intermediate files such as rendered page images. The
+	// submitter owns it and removes it once the result is consumed. Empty
+	// means a directory under os.TempDir().
+	WorkDir  string
+	ResultCh chan *PrepareResult
 }
 
 // PrepareResult holds the output of document preparation.

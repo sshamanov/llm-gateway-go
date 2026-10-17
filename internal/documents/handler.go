@@ -164,6 +164,7 @@ func ProcessHandler(
 			FileType:       ft,
 			Mode:           resolvedMode,
 			HasVisionModel: hasVisionModel,
+			WorkDir:        filepath.Join(docDir, "work-"+requestID),
 			ResultCh:       make(chan *PrepareResult, 1),
 		}
 
@@ -187,9 +188,15 @@ func ProcessHandler(
 		select {
 		case result = <-task.ResultCh:
 		case <-r.Context().Done():
-			// Client disconnected while waiting for preparation.
+			// Client disconnected while waiting for preparation. The worker
+			// may still be writing page images, so clean up once it finishes.
+			go func() {
+				<-task.ResultCh
+				os.RemoveAll(task.WorkDir)
+			}()
 			return
 		}
+		defer os.RemoveAll(task.WorkDir)
 
 		if result.Err != nil {
 			if logger != nil {
@@ -202,13 +209,6 @@ func ProcessHandler(
 				fmt.Sprintf("Document preparation failed: %s", result.Err.Error()),
 			)
 			return
-		}
-
-		// Clean up any page images produced during preparation (e.g. PDF page
-		// renders). The parent directory is removed since all page images for
-		// this task reside under a single temp directory.
-		if len(result.PageImagePaths) > 0 {
-			defer os.RemoveAll(filepath.Dir(result.PageImagePaths[0]))
 		}
 
 		// -----------------------------------------------------------------------

@@ -147,7 +147,11 @@ func (q *PrepareQueue) processPDF(task *PrepareTask) *PrepareResult {
 		}
 
 	case ModeVisionPages:
-		pageDir := filepath.Join(os.TempDir(), "llm-proxy-doc", task.ID, "pages")
+		workDir := task.WorkDir
+		if workDir == "" {
+			workDir = filepath.Join(os.TempDir(), "llm-proxy-doc", task.ID)
+		}
+		pageDir := filepath.Join(workDir, "pages")
 		pagePaths, err := RenderPDFPages(task.FilePath, pageDir)
 		if err != nil {
 			return &PrepareResult{Err: fmt.Errorf("render pages: %w", err)}

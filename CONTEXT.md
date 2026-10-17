@@ -57,3 +57,4 @@ Last updated: 2026-08-26
 - Resolved TPS skew: computeTPS uses eval_duration (parsed now), falls back to total_duration; test added.
 - Resolved streaming queue-full: SSE headers sent only after Submit, so queue-full is a real 503 on all three APIs; DESIGN.md 9.4 updated; tests updated/added.
 - Resolved stats wipe on outage: pruneModelStats keeps rows for unhealthy/expired backends; ARCHITECTURE.md 7.1 updated; test added.
+- Resolved doc page-image leak: renders go to per-request work dir under documents storage; handler removes it, including after client disconnect once the worker finishes.
