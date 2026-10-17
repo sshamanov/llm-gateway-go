@@ -41,6 +41,9 @@ func TestResolveAliasInheritance_Basic(t *testing.T) {
 	if resolved[0].Overrides.Options.NumCtx != 8192 {
 		t.Errorf("base num_ctx: got %d", resolved[0].Overrides.Options.NumCtx)
 	}
+	if resolved[0].Overrides.Options.Temperature != 0.2 {
+		t.Errorf("base temperature mutated by child: got %v", resolved[0].Overrides.Options.Temperature)
+	}
 
 	// coding should inherit PrimaryModel and BackupModels from base.
 	coding := resolved[1]

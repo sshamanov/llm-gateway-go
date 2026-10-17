@@ -102,9 +102,13 @@ func mergeOverrides(base, child AliasOverrides) AliasOverrides {
 		base.Think = child.Think
 	}
 	if child.Options != nil {
-		if base.Options == nil {
-			base.Options = &OllamaOptions{}
+		// Copy the parent's options so overlaying the child never mutates
+		// the parent alias through the shared pointer.
+		opts := OllamaOptions{}
+		if base.Options != nil {
+			opts = *base.Options
 		}
+		base.Options = &opts
 		co := child.Options
 		bo := base.Options
 		if co.NumThread != 0 {

@@ -49,3 +49,4 @@ Last updated: 2026-08-26
 - Resolved double lease release in scheduler (held flag per run function, also covers failed-retry path); new peak-concurrency test fails on old code, passes now.
 - Resolved queue/stream leaks: Ollama stream producer stops on ctx cancel; dispatch reaps cancelled pending jobs (closes StreamCh) and ticks every 1s so jobs start on backend recovery; race tests pass.
 - Resolved PDF panic (bounds checks on startxref and /W, recover in ExtractPDFText and prepare worker); discovered + fixed classic xref parser that never populated entries (header split + 18-byte entry length).
+- Resolved alias option mutation: child extends now copies parent options before overlay; test asserts parent temperature intact (fails on old code).
