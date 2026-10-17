@@ -16,7 +16,17 @@ import (
 
 // ExtractPDFText opens the PDF at path and returns extracted text, one string
 // per page. Returns ErrPDFNoText if no text could be extracted.
-func ExtractPDFText(path string) ([]string, error) {
+//
+// The input is untrusted, so any panic from malformed structure inside the
+// parser is converted into an error rather than crashing the process.
+func ExtractPDFText(path string) (pages []string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			pages = nil
+			err = fmt.Errorf("malformed PDF: %v", r)
+		}
+	}()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading PDF: %w", err)
@@ -55,7 +65,7 @@ func ExtractPDFText(path string) ([]string, error) {
 		return nil, fmt.Errorf("no pages found in PDF")
 	}
 
-	pages := make([]string, 0, len(pageRefs))
+	pages = make([]string, 0, len(pageRefs))
 	anyText := false
 
 	for _, pageRef := range pageRefs {
@@ -102,6 +112,9 @@ func parseXref(data []byte) (map[int]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing startxref offset: %w", err)
 	}
+	if xrefOffset < 0 || xrefOffset >= int64(len(data)) {
+		return nil, fmt.Errorf("startxref offset %d out of range", xrefOffset)
+	}
 
 	xref := make(map[int]int64)
 
@@ -135,6 +148,9 @@ func parseXref(data []byte) (map[int]int64, error) {
 
 // parseClassicXref parses the classic xref table starting at the given offset.
 func parseClassicXref(data []byte, offset int64, xref map[int]int64) error {
+	if offset < 0 || offset >= int64(len(data)) {
+		return fmt.Errorf("xref offset %d out of range", offset)
+	}
 	pos := int(offset)
 	line := nextLine(data, &pos)
 
@@ -149,7 +165,10 @@ func parseClassicXref(data []byte, offset int64, xref map[int]int64) error {
 			break
 		}
 
-		// Check for sub-section header like "0 6"
+		// Check for sub-section header like "0 6" (first line only).
+		if end := bytes.IndexAny(line, "\r\n"); end >= 0 {
+			line = line[:end]
+		}
 		parts := bytes.Fields(line)
 		if len(parts) != 2 {
 			break
@@ -170,12 +189,14 @@ func parseClassicXref(data []byte, offset int64, xref map[int]int64) error {
 			}
 			// Format: nnnnnnnnnn ggggg n
 			// Fields: byte offset (10 digits), generation (5 digits), "n" or "f".
-			if len(line) < 20 {
+			// Entries are 20 bytes including a 2-byte EOL, so at least 18
+			// remain once nextLine strips the line ending.
+			if len(line) < 18 {
 				// Skip malformed entry.
 				continue
 			}
-			offsetStr := string(bytes.TrimSpace(line[:11]))
-			inUse := len(line) >= 20 && line[17] == 'n'
+			offsetStr := string(bytes.TrimSpace(line[:10]))
+			inUse := line[17] == 'n'
 
 			if inUse {
 				objOffset, err := strconv.ParseInt(offsetStr, 10, 64)
@@ -242,6 +263,13 @@ func parseXrefStream(data []byte, offset int64, xref map[int]int64) error {
 			f1, _ := strconv.Atoi(wParts[0])
 			f2, _ := strconv.Atoi(wParts[1])
 			f3, _ := strconv.Atoi(wParts[2])
+			// Field widths are at most 8 bytes each (int64 offsets).
+			if f1 < 0 || f2 < 0 || f3 < 0 || f1 > 8 || f2 > 8 || f3 > 8 {
+				return fmt.Errorf("invalid /W field widths in xref stream")
+			}
+			if firstObj < 0 || numObjs < 0 {
+				return fmt.Errorf("invalid /Index in xref stream")
+			}
 
 			entrySize := f1 + f2 + f3
 			if entrySize == 0 {

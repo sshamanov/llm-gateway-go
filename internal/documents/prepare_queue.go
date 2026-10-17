@@ -74,9 +74,20 @@ func (q *PrepareQueue) Submit(task *PrepareTask) error {
 func (q *PrepareQueue) worker() {
 	defer q.wg.Done()
 	for task := range q.tasks {
-		result := q.processTask(task)
+		result := q.safeProcessTask(task)
 		task.ResultCh <- result
 	}
+}
+
+// safeProcessTask runs processTask and converts a panic on untrusted input
+// into a task error so one bad upload cannot kill the process.
+func (q *PrepareQueue) safeProcessTask(task *PrepareTask) (result *PrepareResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = &PrepareResult{Err: fmt.Errorf("document preparation panicked: %v", r)}
+		}
+	}()
+	return q.processTask(task)
 }
 
 // processTask dispatches to the appropriate handler based on file type.
