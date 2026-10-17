@@ -41,21 +41,15 @@ Last updated: 2026-08-26
   `tool_choice` is accepted and ignored. Verified with full go test + go vet in golang:1.22.
 - **2026-08-26 — Streaming tool_calls finish_reason**: Chat Completions streams now report
   finish_reason "tool_calls" when Ollama sends tool calls before the done chunk; live E2E on qwen3.6:35b.
+- **2026-10-17 — Code-review fixes**: SSE now flushes through the logging middleware; scheduler
+  leases released exactly once (cap enforced); cancelled/unschedulable jobs reaped with a 1s
+  dispatch tick and stream readers exit on cancel; PDF parser bounds-checked with panic recovery,
+  and classic xref tables now actually parse; child aliases no longer mutate parent options;
+  image calls cancel on disconnect/10 min; Anthropic and Responses streams follow their SDK event
+  protocols (no `[DONE]`); Responses input accepts string content and prior assistant turns;
+  streaming queue-full is a real 503; TPS learned from eval_duration; stats survive outages;
+  document page renders kept under storage and cleaned up; tree gofmt-clean. go vet,
+  go test -race ./..., and all 19 mock E2E scenarios pass.
 
 ## Live Stream
 
-- Task: fix /code-review findings (SSE flush, double lease release, PDF panic, protocol events, Responses input, queue leaks, alias options, image timeout, gofmt).
-- Implemented Flush/Unwrap on logging statusRecorder so SSE streams flush through middleware; httpapi tests pass.
-- Resolved double lease release in scheduler (held flag per run function, also covers failed-retry path); new peak-concurrency test fails on old code, passes now.
-- Resolved queue/stream leaks: Ollama stream producer stops on ctx cancel; dispatch reaps cancelled pending jobs (closes StreamCh) and ticks every 1s so jobs start on backend recovery; race tests pass.
-- Resolved PDF panic (bounds checks on startxref and /W, recover in ExtractPDFText and prepare worker); discovered + fixed classic xref parser that never populated entries (header split + 18-byte entry length).
-- Resolved alias option mutation: child extends now copies parent options before overlay; test asserts parent temperature intact (fails on old code).
-- Resolved image gen hang: SendGeneration takes ctx; handler uses request ctx with 10-min ceiling; cancel test passes.
-- Resolved Anthropic stream protocol: message_start first, no [DONE], text block closed before tool_use, explicit empty text/input in block starts, error event on truncated stream; strict event-order test added.
-- Resolved Responses input parsing: string content in array items, output_text/text blocks, input_image image_url data URLs, non-message items skipped; tests added.
-- Resolved Responses stream protocol: created/in_progress, message item + content_part lifecycle, function_call_arguments.done, response.completed/failed with sequence_number; no [DONE]; sequence test added.
-- Resolved TPS skew: computeTPS uses eval_duration (parsed now), falls back to total_duration; test added.
-- Resolved streaming queue-full: SSE headers sent only after Submit, so queue-full is a real 503 on all three APIs; DESIGN.md 9.4 updated; tests updated/added.
-- Resolved stats wipe on outage: pruneModelStats keeps rows for unhealthy/expired backends; ARCHITECTURE.md 7.1 updated; test added.
-- Resolved doc page-image leak: renders go to per-request work dir under documents storage; handler removes it, including after client disconnect once the worker finishes.
-- Executed gofmt -w across 28 files (whitespace/alignment only); full go vet + go test -race ./... pass.
