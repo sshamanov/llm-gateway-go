@@ -47,3 +47,4 @@ Last updated: 2026-08-26
 - Task: fix /code-review findings (SSE flush, double lease release, PDF panic, protocol events, Responses input, queue leaks, alias options, image timeout, gofmt).
 - Implemented Flush/Unwrap on logging statusRecorder so SSE streams flush through middleware; httpapi tests pass.
 - Resolved double lease release in scheduler (held flag per run function, also covers failed-retry path); new peak-concurrency test fails on old code, passes now.
+- Resolved queue/stream leaks: Ollama stream producer stops on ctx cancel; dispatch reaps cancelled pending jobs (closes StreamCh) and ticks every 1s so jobs start on backend recovery; race tests pass.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSendChatStream_Basic(t *testing.T) {
@@ -283,5 +284,42 @@ func TestSendChatStream_StreamForcedTrue(t *testing.T) {
 
 	// Drain remaining
 	for range ch {
+	}
+}
+
+// TestSendChatStream_CancelWithoutDrain verifies the producer goroutine exits
+// and closes the channel when the caller cancels instead of draining.
+func TestSendChatStream_CancelWithoutDrain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		line := `{"model":"llama3","message":{"role":"assistant","content":"x"},"done":false}` + "\n"
+		// Enough lines to fill the channel buffer several times over.
+		fmt.Fprint(w, strings.Repeat(line, 200))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := SendChatStream(ctx, server.Client(), server.URL, &ChatRequest{Model: "llama3"})
+	if err != nil {
+		t.Fatalf("SendChatStream: %v", err)
+	}
+	<-ch // read one chunk, then abandon the stream
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("stream channel not closed after cancel")
+		}
 	}
 }

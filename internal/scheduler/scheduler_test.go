@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -535,5 +536,47 @@ func TestScheduler_Dispatch_EnforcesHostCapacity(t *testing.T) {
 	}
 	if n := s.Scorer.Hosts.HostActiveJobs("default"); n != 0 {
 		t.Errorf("host active jobs after completion = %d, want 0", n)
+	}
+}
+
+// TestScheduler_ReapsCancelledPendingJob verifies that a job that can never
+// be scheduled is removed from the queue once its client goes away, and that
+// a streaming handler waiting on StreamCh is unblocked.
+func TestScheduler_ReapsCancelledPendingJob(t *testing.T) {
+	server := httptest.NewServer(fakeOllamaHandler(t, "", http.StatusOK))
+	defer server.Close()
+
+	s := newTestScheduler(t, server.URL, 2, defaultConfig())
+	defer s.Stop()
+	s.Start()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &Job{
+		ID:         "orphan",
+		Candidates: []string{"not-on-any-backend"},
+		Messages:   []ollama.ChatMessage{{Role: "user", Content: "Hi"}},
+		Streaming:  true,
+		StreamCh:   make(chan *ollama.StreamChunk, 1),
+		ResultChan: make(chan JobResult, 1),
+		JobCtx:     ctx,
+	}
+	if err := s.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+	cancel()
+
+	select {
+	case _, ok := <-job.StreamCh:
+		if ok {
+			t.Fatal("unexpected chunk on StreamCh")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("StreamCh not closed after client cancel")
+	}
+	if n := s.Queue.Len(); n != 0 {
+		t.Errorf("queue length = %d, want 0", n)
+	}
+	if job.State != StateAborted {
+		t.Errorf("job state = %v, want aborted", job.State)
 	}
 }

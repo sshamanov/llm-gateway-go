@@ -107,6 +107,29 @@ func (q *Queue) Remove(id string) *Job {
 	return nil
 }
 
+// RemoveIf removes every job for which pred returns true and returns them.
+func (q *Queue) RemoveIf(pred func(*Job) bool) []*Job {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var removed []*Job
+	kept := q.items.items[:0]
+	for _, job := range q.items.items {
+		if pred(job) {
+			removed = append(removed, job)
+		} else {
+			kept = append(kept, job)
+		}
+	}
+	for i := len(kept); i < len(q.items.items); i++ {
+		q.items.items[i] = nil
+	}
+	q.items.items = kept
+	if len(removed) > 0 {
+		heap.Init(q.items)
+	}
+	return removed
+}
+
 // Len returns the total number of jobs in the queue (all states).
 func (q *Queue) Len() int {
 	q.mu.Lock()

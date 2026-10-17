@@ -21,7 +21,8 @@ type StreamChunk struct {
 // of parsed JSON lines. The returned channel is closed when the stream ends
 // (either normally, on error, or on context cancellation).
 //
-// The caller MUST drain the channel until it closes.
+// The caller must either drain the channel until it closes or cancel ctx;
+// the producer stops sending once ctx is done.
 // The caller should create the result channel before calling this function
 // so it owns the channel lifecycle.
 func SendChatStream(ctx context.Context, client *http.Client, baseURL string, req *ChatRequest) (<-chan StreamChunk, error) {
@@ -53,6 +54,17 @@ func SendChatStream(ctx context.Context, client *http.Client, baseURL string, re
 
 	ch := make(chan StreamChunk, 10)
 
+	// send delivers a chunk unless the caller has gone away, so an abandoned
+	// stream never blocks this goroutine forever.
+	send := func(c StreamChunk) bool {
+		select {
+		case ch <- c:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	go func() {
 		defer close(ch)
 		defer resp.Body.Close()
@@ -68,18 +80,20 @@ func SendChatStream(ctx context.Context, client *http.Client, baseURL string, re
 
 			var chatResp ChatResponse
 			if err := json.Unmarshal([]byte(line), &chatResp); err != nil {
-				ch <- StreamChunk{Err: fmt.Errorf("stream: decode line: %w", err)}
+				send(StreamChunk{Err: fmt.Errorf("stream: decode line: %w", err)})
 				return
 			}
 
-			ch <- StreamChunk{Response: &chatResp}
+			if !send(StreamChunk{Response: &chatResp}) {
+				return
+			}
 		}
 
 		if err := scanner.Err(); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			ch <- StreamChunk{Err: fmt.Errorf("stream: read: %w", err)}
+			send(StreamChunk{Err: fmt.Errorf("stream: read: %w", err)})
 		}
 	}()
 

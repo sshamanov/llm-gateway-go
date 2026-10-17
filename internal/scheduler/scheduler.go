@@ -94,14 +94,42 @@ func (s *Scheduler) Stop() {
 
 // dispatchLoop is the main event loop that waits for wakeup signals and
 // triggers dispatch rounds. It exits when the context is cancelled.
+//
+// A periodic tick also runs dispatch so abandoned jobs are reaped and queued
+// jobs start once a backend recovers, without waiting for another Submit.
 func (s *Scheduler) dispatchLoop() {
 	defer s.Wg.Done()
+	ticker := time.NewTicker(dispatchTickInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.Ctx.Done():
 			return
 		case <-s.Wakeup:
 			s.dispatch()
+		case <-ticker.C:
+			s.dispatch()
+		}
+	}
+}
+
+// dispatchTickInterval is how often dispatch runs without an explicit wakeup.
+const dispatchTickInterval = time.Second
+
+// reapCancelled removes pending jobs whose client context is done, marks them
+// aborted, and unblocks their handlers.
+func (s *Scheduler) reapCancelled() {
+	reaped := s.Queue.RemoveIf(func(j *Job) bool {
+		return j.JobCtx != nil && j.JobCtx.Err() != nil
+	})
+	for _, j := range reaped {
+		j.State = StateAborted
+		select {
+		case j.ResultChan <- JobResult{Err: j.JobCtx.Err()}:
+		default:
+		}
+		if j.Streaming && j.StreamCh != nil {
+			close(j.StreamCh)
 		}
 	}
 }
@@ -114,6 +142,8 @@ func (s *Scheduler) dispatch() {
 	if n <= 0 {
 		n = 64
 	}
+
+	s.reapCancelled()
 
 	pendingJobs := s.Queue.TopN(n)
 	if len(pendingJobs) == 0 {
