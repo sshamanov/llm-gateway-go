@@ -6,7 +6,7 @@ import "errors"
 type FileType int
 
 const (
-	FileTypeTXT  FileType = iota
+	FileTypeTXT FileType = iota
 	FileTypeMD
 	FileTypePDF
 	FileTypePNG
@@ -51,7 +51,7 @@ const (
 type ChunkType int
 
 const (
-	ChunkTypeText  ChunkType = iota
+	ChunkTypeText ChunkType = iota
 	ChunkTypeImage
 )
 
@@ -103,11 +103,11 @@ type PrepareTask struct {
 
 // PrepareResult holds the output of document preparation.
 type PrepareResult struct {
-	Chunks          []Chunk
-	ResolvedMode    Mode
-	Method          string
-	PageImagePaths  []string
-	Err             error
+	Chunks         []Chunk
+	ResolvedMode   Mode
+	Method         string
+	PageImagePaths []string
+	Err            error
 }
 
 // Errors.
@@ -124,9 +124,9 @@ var (
 
 // Constants.
 const (
-	DefaultChunkSize   = 4000
-	MinTextThreshold   = 100
-	DefaultMaxBytes    = 50 * 1024 * 1024 // 50MB
+	DefaultChunkSize = 4000
+	MinTextThreshold = 100
+	DefaultMaxBytes  = 50 * 1024 * 1024 // 50MB
 )
 
 // supportedExtensions maps lowercase extensions (without dot) to FileType.

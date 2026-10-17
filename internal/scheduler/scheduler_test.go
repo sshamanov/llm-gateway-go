@@ -75,12 +75,12 @@ func defaultConfig() config.SchedulerConfig {
 // validChatResponse returns a minimal valid Ollama ChatResponse JSON body.
 func validChatResponse(model, content string) string {
 	resp := ollama.ChatResponse{
-		Model:          model,
-		Message:        ollama.ChatMessage{Role: "assistant", Content: content},
-		Done:           true,
-		TotalDuration:  500000000, // 0.5s
-		LoadDuration:   100000000, // 0.1s
-		EvalCount:      50,
+		Model:         model,
+		Message:       ollama.ChatMessage{Role: "assistant", Content: content},
+		Done:          true,
+		TotalDuration: 500000000, // 0.5s
+		LoadDuration:  100000000, // 0.1s
+		EvalCount:     50,
 	}
 	b, _ := json.Marshal(resp)
 	return string(b)

@@ -1,8 +1,8 @@
 package openai
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,7 +29,7 @@ func TestResponses_StringInput(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -149,7 +149,7 @@ func TestResponses_ArrayInput(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -234,7 +234,7 @@ func TestResponses_Instructions(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -359,7 +359,7 @@ func TestResponses_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -456,7 +456,7 @@ func TestResponses_Streaming_Works(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -1175,7 +1175,7 @@ func TestResponses_ToolCall(t *testing.T) {
 			body, _ := io.ReadAll(r.Body)
 			capturedBody.Store(string(body))
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -1265,7 +1265,7 @@ func TestResponses_Streaming_ToolCall(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",

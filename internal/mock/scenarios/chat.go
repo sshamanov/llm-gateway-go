@@ -47,8 +47,8 @@ func HealthyCluster(h *mock.Harness) error {
 // StreamingChat runs a streaming chat request and verifies SSE chunks.
 func StreamingChat(h *mock.Harness) error {
 	req := map[string]interface{}{
-		"model":    "llama3",
-		"stream":   true,
+		"model":  "llama3",
+		"stream": true,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Hello"},
 		},

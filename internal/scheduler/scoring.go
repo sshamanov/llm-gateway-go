@@ -10,10 +10,10 @@ type Assignment struct {
 	Job         *Job
 	BackendID   string
 	Host        string
-	ModelName   string   // the specific candidate model to use
+	ModelName   string // the specific candidate model to use
 	Cost        float64
-	IsBackup    bool     // true if using a backup model (not primary)
-	ModelLoaded bool     // true if the model is already loaded on this backend
+	IsBackup    bool // true if using a backup model (not primary)
+	ModelLoaded bool // true if the model is already loaded on this backend
 }
 
 // Scorer computes assignment costs and finds the best assignment.

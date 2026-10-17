@@ -86,11 +86,11 @@ func (h *Harness) WriteConfig() error {
 	cfg.OllamaBackends = nil
 	for i, fo := range h.Ollamas {
 		cfg.OllamaBackends = append(cfg.OllamaBackends, config.OllamaBackendConfig{
-			ID:                   fo.ID,
-			URL:                  fo.URL,
-			Host:                 "h1",
+			ID:                    fo.ID,
+			URL:                   fo.URL,
+			Host:                  "h1",
 			MaxConcurrentRequests: 3,
-			Enabled:              true,
+			Enabled:               true,
 		})
 		_ = i
 	}
@@ -99,12 +99,12 @@ func (h *Harness) WriteConfig() error {
 	cfg.ImageBackends = nil
 	for i, fi := range h.Images {
 		cfg.ImageBackends = append(cfg.ImageBackends, config.ImageBackendConfig{
-			ID:                   fmt.Sprintf("img-%d", i),
-			Type:                 "openai_compatible",
-			URL:                  fi.URL,
-			Host:                 "h1",
+			ID:                    fmt.Sprintf("img-%d", i),
+			Type:                  "openai_compatible",
+			URL:                   fi.URL,
+			Host:                  "h1",
 			MaxConcurrentRequests: 1,
-			Enabled:              true,
+			Enabled:               true,
 		})
 	}
 

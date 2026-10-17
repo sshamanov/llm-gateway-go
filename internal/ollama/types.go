@@ -78,15 +78,15 @@ type ChatToolCallFunction struct {
 
 // ChatOptions maps to the "options" object in the Ollama /api/chat request.
 type ChatOptions struct {
-	NumThread      int      `json:"num_thread,omitempty"`
-	NumCtx         int      `json:"num_ctx,omitempty"`
-	Temperature    float64  `json:"temperature,omitempty"`
-	TopP           float64  `json:"top_p,omitempty"`
-	TopK           int      `json:"top_k,omitempty"`
-	RepeatPenalty  float64  `json:"repeat_penalty,omitempty"`
-	NumPredict     int      `json:"num_predict,omitempty"`
-	Stop           []string `json:"stop,omitempty"`
-	UseMmap        *bool    `json:"use_mmap,omitempty"`
+	NumThread     int      `json:"num_thread,omitempty"`
+	NumCtx        int      `json:"num_ctx,omitempty"`
+	Temperature   float64  `json:"temperature,omitempty"`
+	TopP          float64  `json:"top_p,omitempty"`
+	TopK          int      `json:"top_k,omitempty"`
+	RepeatPenalty float64  `json:"repeat_penalty,omitempty"`
+	NumPredict    int      `json:"num_predict,omitempty"`
+	Stop          []string `json:"stop,omitempty"`
+	UseMmap       *bool    `json:"use_mmap,omitempty"`
 }
 
 // ChatResponse is the response from Ollama's POST /api/chat (non-streaming).
@@ -96,10 +96,10 @@ type ChatResponse struct {
 	Message   ChatMessage `json:"message"`
 	Done      bool        `json:"done"`
 	// Metrics populated when done=true.
-	TotalDuration      int64  `json:"total_duration,omitempty"`
-	LoadDuration       int64  `json:"load_duration,omitempty"`
-	PromptEvalCount    int    `json:"prompt_eval_count,omitempty"`
-	EvalCount          int    `json:"eval_count,omitempty"`
-	EvalDuration       int64  `json:"eval_duration,omitempty"`
-	DoneReason         string `json:"done_reason,omitempty"`
+	TotalDuration   int64  `json:"total_duration,omitempty"`
+	LoadDuration    int64  `json:"load_duration,omitempty"`
+	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
+	EvalCount       int    `json:"eval_count,omitempty"`
+	EvalDuration    int64  `json:"eval_duration,omitempty"`
+	DoneReason      string `json:"done_reason,omitempty"`
 }

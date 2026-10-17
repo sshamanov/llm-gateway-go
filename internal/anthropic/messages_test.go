@@ -52,7 +52,7 @@ func TestMessages_Basic(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -167,7 +167,7 @@ func TestMessages_SystemString(t *testing.T) {
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			capturedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -250,7 +250,7 @@ func TestMessages_SystemArray(t *testing.T) {
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			capturedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",
@@ -332,7 +332,7 @@ func TestMessages_ThinkingEnabled(t *testing.T) {
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/chat") {
 			capturedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(ollama.ChatResponse{
-				Model: "qwen:30b",
+				Model:     "qwen:30b",
 				CreatedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 				Message: ollama.ChatMessage{
 					Role:    "assistant",

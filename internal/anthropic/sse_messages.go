@@ -10,7 +10,7 @@ import (
 // sseMessageStart is the first event in an Anthropic streaming response. It
 // carries the message envelope with empty content.
 type sseMessageStart struct {
-	Type    string                   `json:"type"` // "message_start"
+	Type    string                  `json:"type"` // "message_start"
 	Message anthropicStreamEnvelope `json:"message"`
 }
 
@@ -80,9 +80,9 @@ type sseContentBlockStop struct {
 
 // sseMessageDelta is the penultimate event carrying stop_reason and usage.
 type sseMessageDelta struct {
-	Type  string              `json:"type"` // "message_delta"
-	Delta anthropicStopDelta  `json:"delta"`
-	Usage anthropicUsage      `json:"usage"`
+	Type  string             `json:"type"` // "message_delta"
+	Delta anthropicStopDelta `json:"delta"`
+	Usage anthropicUsage     `json:"usage"`
 }
 
 // anthropicStopDelta is the delta portion of a message_delta event.

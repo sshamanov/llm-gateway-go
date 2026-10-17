@@ -26,9 +26,9 @@ type Gauge struct {
 	value float64
 }
 
-func (g *Gauge) Set(v float64)      { g.mu.Lock(); defer g.mu.Unlock(); g.value = v }
-func (g *Gauge) Add(delta float64)  { g.mu.Lock(); defer g.mu.Unlock(); g.value += delta }
-func (g *Gauge) Value() float64     { g.mu.Lock(); defer g.mu.Unlock(); return g.value }
+func (g *Gauge) Set(v float64)     { g.mu.Lock(); defer g.mu.Unlock(); g.value = v }
+func (g *Gauge) Add(delta float64) { g.mu.Lock(); defer g.mu.Unlock(); g.value += delta }
+func (g *Gauge) Value() float64    { g.mu.Lock(); defer g.mu.Unlock(); return g.value }
 
 // MetricSample is a single labeled metric data point.
 type MetricSample struct {

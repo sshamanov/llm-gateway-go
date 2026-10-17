@@ -44,12 +44,12 @@ func TestSendChat_Success(t *testing.T) {
 				Role:    "assistant",
 				Content: "Hi there! How can I help you?",
 			},
-			Done:             true,
-			TotalDuration:    123456789000,
-			LoadDuration:     98765432100,
-			PromptEvalCount:  15,
-			EvalCount:        42,
-			DoneReason:       "stop",
+			Done:            true,
+			TotalDuration:   123456789000,
+			LoadDuration:    98765432100,
+			PromptEvalCount: 15,
+			EvalCount:       42,
+			DoneReason:      "stop",
 		}
 
 		w.Header().Set("Content-Type", "application/json")

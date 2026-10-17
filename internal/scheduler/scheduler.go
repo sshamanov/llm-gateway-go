@@ -25,7 +25,7 @@ type Scheduler struct {
 	Scorer         *Scorer
 	Stats          *StatsTracker
 	Client         *http.Client
-	BackendURLs    map[string]string                  // backend ID -> base URL
+	BackendURLs    map[string]string                     // backend ID -> base URL
 	BackendConfigs map[string]config.OllamaBackendConfig // backend ID -> config
 	Logger         *logging.Logger
 	Ctx            context.Context
@@ -60,7 +60,7 @@ func NewScheduler(
 		Cancel:         cancel,
 		Wakeup:         make(chan struct{}, 1),
 		Snapshots:      snapshots,
-		StartedAt:   time.Now(),
+		StartedAt:      time.Now(),
 	}
 }
 

@@ -12,9 +12,9 @@ const maxCountTokensBodySize = 10 * 1024 * 1024
 
 // countTokensRequest is the request body for POST /v1/messages/count_tokens.
 type countTokensRequest struct {
-	Model    string                   `json:"model"`
-	Messages []anthropicInputMessage  `json:"messages"`
-	System   json.RawMessage          `json:"system,omitempty"`
+	Model    string                  `json:"model"`
+	Messages []anthropicInputMessage `json:"messages"`
+	System   json.RawMessage         `json:"system,omitempty"`
 }
 
 // countTokensResponse is the response body for POST /v1/messages/count_tokens.

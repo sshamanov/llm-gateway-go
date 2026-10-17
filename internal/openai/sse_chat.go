@@ -35,9 +35,9 @@ type sseChatDelta struct {
 
 // sseToolCall is a function invocation delta in a streaming chat chunk.
 type sseToolCall struct {
-	Index    int                `json:"index"`
-	ID       string             `json:"id,omitempty"`
-	Type     string             `json:"type,omitempty"`
+	Index    int                 `json:"index"`
+	ID       string              `json:"id,omitempty"`
+	Type     string              `json:"type,omitempty"`
 	Function sseToolCallFunction `json:"function,omitempty"`
 }
 

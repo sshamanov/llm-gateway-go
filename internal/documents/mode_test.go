@@ -6,10 +6,10 @@ import (
 
 func TestResolveMode(t *testing.T) {
 	tests := []struct {
-		name         string
-		requested    string
-		defaultMode  Mode
-		want         Mode
+		name        string
+		requested   string
+		defaultMode Mode
+		want        Mode
 	}{
 		{"auto", "auto", ModeTextOnly, ModeAuto},
 		{"text_only", "text_only", ModeAuto, ModeTextOnly},

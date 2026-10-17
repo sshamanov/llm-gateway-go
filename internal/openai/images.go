@@ -55,7 +55,7 @@ type imageGenerationRequest struct {
 
 // imageGenerationResponse is the OpenAI-compatible image generation response body.
 type imageGenerationResponse struct {
-	Created int64                `json:"created"`
+	Created int64                 `json:"created"`
 	Data    []imageGenerationData `json:"data"`
 }
 

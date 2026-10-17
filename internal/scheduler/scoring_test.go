@@ -19,7 +19,7 @@ func defaultScorerConfig() config.SchedulerConfig {
 		UnknownColdLoadPenaltySeconds:   30.0,
 		AliasSubstitutionPenaltySeconds: 8.0,
 		DisruptionFactor:                0.25,
-		Retry: config.RetryConfig{MaxAttempts: 2},
+		Retry:                           config.RetryConfig{MaxAttempts: 2},
 	}
 }
 

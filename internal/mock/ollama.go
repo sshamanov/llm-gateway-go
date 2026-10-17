@@ -19,14 +19,14 @@ type FakeOllamaConfig struct {
 	LoadedModels        []string
 	ChatLatency         time.Duration
 	StreamChunkLatency  time.Duration
-	FailureRate         float64        // Random failure probability (0..1) per request
-	FailCount           int            // Deterministic: fail first N requests, then succeed
+	FailureRate         float64 // Random failure probability (0..1) per request
+	FailCount           int     // Deterministic: fail first N requests, then succeed
 	FirstChunkGarbage   bool
 	MidStreamFailAfter  int
 	ChatResponseContent string
-	LoadDuration        int64          // Fake model load time in nanoseconds
-	TotalDuration       int64          // Fake total inference time in nanoseconds
-	EvalCount           int            // Fake eval token count for TPS calculation
+	LoadDuration        int64 // Fake model load time in nanoseconds
+	TotalDuration       int64 // Fake total inference time in nanoseconds
+	EvalCount           int   // Fake eval token count for TPS calculation
 }
 
 // requestCount tracks per-backend request counts for deterministic failure.
@@ -44,10 +44,10 @@ func (rc *requestCount) inc() int {
 
 // FakeOllama wraps httptest.Server as a fully independent fake Ollama node.
 type FakeOllama struct {
-	Server    *httptest.Server
-	URL       string
-	ID        string
-	reqCount  *requestCount
+	Server   *httptest.Server
+	URL      string
+	ID       string
+	reqCount *requestCount
 }
 
 // NewFakeOllama creates and starts a fake Ollama backend.
@@ -149,12 +149,12 @@ func handleNonStreamingChat(w http.ResponseWriter, cfg FakeOllamaConfig, model s
 			Role:    "assistant",
 			Content: cfg.ChatResponseContent,
 		},
-		Done:             true,
-		TotalDuration:    totalDur,
-		LoadDuration:     cfg.LoadDuration,
-		PromptEvalCount:  10,
-		EvalCount:        evalCount,
-		DoneReason:       "stop",
+		Done:            true,
+		TotalDuration:   totalDur,
+		LoadDuration:    cfg.LoadDuration,
+		PromptEvalCount: 10,
+		EvalCount:       evalCount,
+		DoneReason:      "stop",
 	}
 
 	w.Header().Set("Content-Type", "application/json")

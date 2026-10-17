@@ -25,21 +25,21 @@ func DefaultConfig() Config {
 		},
 		OllamaBackends: []OllamaBackendConfig{
 			{
-				ID:                   "ollama-main",
-				URL:                  "http://127.0.0.1:11434",
-				Host:                 "default",
+				ID:                    "ollama-main",
+				URL:                   "http://127.0.0.1:11434",
+				Host:                  "default",
 				MaxConcurrentRequests: 1,
-				Enabled:              true,
+				Enabled:               true,
 			},
 		},
 		ImageBackends: []ImageBackendConfig{
 			{
-				ID:                   "image-main",
-				Type:                 "openai_compatible",
-				URL:                  "http://127.0.0.1:8080/v1",
-				Host:                 "default",
+				ID:                    "image-main",
+				Type:                  "openai_compatible",
+				URL:                   "http://127.0.0.1:8080/v1",
+				Host:                  "default",
 				MaxConcurrentRequests: 1,
-				Enabled:              false,
+				Enabled:               false,
 			},
 		},
 		AudioBackends: []AudioBackendConfig{},
@@ -97,8 +97,8 @@ func DefaultConfig() Config {
 			DisruptionFactor:                0.25,
 			Retry: RetryConfig{
 				MaxAttempts:                    2,
-				StreamingRetryBeforeFirstToken:  true,
-				StreamingRetryAfterFirstToken:   false,
+				StreamingRetryBeforeFirstToken: true,
+				StreamingRetryAfterFirstToken:  false,
 			},
 		},
 	}

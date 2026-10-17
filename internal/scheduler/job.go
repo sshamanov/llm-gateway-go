@@ -92,14 +92,14 @@ type Job struct {
 	Tools          json.RawMessage
 
 	// Streaming job fields.
-	Streaming  bool                     // true if this is a streaming job
-	StreamCh   chan *ollama.StreamChunk // delivers streaming chunks to handler (must be created by submitter)
-	JobCtx     context.Context          // derived from HTTP request context; cancellation aborts backend request
+	Streaming bool                     // true if this is a streaming job
+	StreamCh  chan *ollama.StreamChunk // delivers streaming chunks to handler (must be created by submitter)
+	JobCtx    context.Context          // derived from HTTP request context; cancellation aborts backend request
 
-	ResultChan     chan JobResult
-	BackendID      string
-	ConcreteModel  string
-	Attempts       int
+	ResultChan    chan JobResult
+	BackendID     string
+	ConcreteModel string
+	Attempts      int
 }
 
 // JobResult carries the outcome of a completed job.

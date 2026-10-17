@@ -27,18 +27,18 @@ const maxRequestBodySize = 10 * 1024 * 1024
 // ---------------------------------------------------------------------------
 
 type anthropicMessageRequest struct {
-	Model         string                    `json:"model"`
-	Messages      []anthropicInputMessage   `json:"messages"`
-	System        json.RawMessage           `json:"system,omitempty"`
-	MaxTokens     int                       `json:"max_tokens"`
-	Stream        *bool                     `json:"stream,omitempty"`
-	Temperature   *float64                  `json:"temperature,omitempty"`
-	TopP          *float64                  `json:"top_p,omitempty"`
-	TopK          *int                      `json:"top_k,omitempty"`
-	StopSequences []string                  `json:"stop_sequences,omitempty"`
-	Tools         json.RawMessage           `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage           `json:"tool_choice,omitempty"`
-	Thinking      *anthropicThinkingConfig  `json:"thinking,omitempty"`
+	Model         string                   `json:"model"`
+	Messages      []anthropicInputMessage  `json:"messages"`
+	System        json.RawMessage          `json:"system,omitempty"`
+	MaxTokens     int                      `json:"max_tokens"`
+	Stream        *bool                    `json:"stream,omitempty"`
+	Temperature   *float64                 `json:"temperature,omitempty"`
+	TopP          *float64                 `json:"top_p,omitempty"`
+	TopK          *int                     `json:"top_k,omitempty"`
+	StopSequences []string                 `json:"stop_sequences,omitempty"`
+	Tools         json.RawMessage          `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage          `json:"tool_choice,omitempty"`
+	Thinking      *anthropicThinkingConfig `json:"thinking,omitempty"`
 }
 
 type anthropicInputMessage struct {
@@ -107,7 +107,7 @@ type anthropicErrorResponse struct {
 }
 
 type anthropicErrorDetail struct {
-	Type    string `json:"type"`    // "invalid_request_error", "api_error"
+	Type    string `json:"type"` // "invalid_request_error", "api_error"
 	Message string `json:"message"`
 }
 

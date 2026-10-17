@@ -46,8 +46,8 @@ func StreamingRetryBeforeToken(h *mock.Harness) error {
 	}
 
 	req := map[string]interface{}{
-		"model":    "llama3",
-		"stream":   true,
+		"model":  "llama3",
+		"stream": true,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Retry test"},
 		},
@@ -153,16 +153,16 @@ func RetryExhausted(h *mock.Harness) error {
 
 	err = rh.StartFakeBackends([]mock.FakeOllamaConfig{
 		{
-			ID:          "b1",
-			Models:      []string{"llama3"},
+			ID:           "b1",
+			Models:       []string{"llama3"},
 			LoadedModels: []string{"llama3"},
-			FailureRate: 1.0, // Always fails.
+			FailureRate:  1.0, // Always fails.
 		},
 		{
-			ID:          "b2",
-			Models:      []string{"llama3"},
+			ID:           "b2",
+			Models:       []string{"llama3"},
 			LoadedModels: []string{"llama3"},
-			FailureRate: 1.0, // Always fails.
+			FailureRate:  1.0, // Always fails.
 		},
 	}, 0)
 	if err != nil {
@@ -215,9 +215,9 @@ func NoRetryAfterToken(h *mock.Harness) error {
 
 	err = rh.StartFakeBackends([]mock.FakeOllamaConfig{
 		{
-			ID:                "b1",
-			Models:            []string{"llama3"},
-			LoadedModels:      []string{"llama3"},
+			ID:                 "b1",
+			Models:             []string{"llama3"},
+			LoadedModels:       []string{"llama3"},
 			MidStreamFailAfter: 1,
 		},
 		{
@@ -241,8 +241,8 @@ func NoRetryAfterToken(h *mock.Harness) error {
 	}
 
 	req := map[string]interface{}{
-		"model":    "llama3",
-		"stream":   true,
+		"model":  "llama3",
+		"stream": true,
 		"messages": []map[string]string{
 			{"role": "user", "content": "No retry test"},
 		},

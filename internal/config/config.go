@@ -2,16 +2,16 @@ package config
 
 // Config is the top-level proxy configuration loaded from config.json.
 type Config struct {
-	Server         ServerConfig           `json:"server"`
-	Hosts          []HostConfig           `json:"hosts"`
-	OllamaBackends []OllamaBackendConfig  `json:"ollama_backends"`
-	ImageBackends  []ImageBackendConfig   `json:"image_backends"`
-	AudioBackends  []AudioBackendConfig   `json:"audio_backends"`
-	OllamaDefaults OllamaDefaultsConfig   `json:"ollama_defaults"`
-	Models         ModelsConfig           `json:"models"`
-	Policy         PolicyConfig           `json:"policy"`
-	Documents      DocumentsConfig        `json:"documents"`
-	Scheduler      SchedulerConfig        `json:"scheduler"`
+	Server         ServerConfig          `json:"server"`
+	Hosts          []HostConfig          `json:"hosts"`
+	OllamaBackends []OllamaBackendConfig `json:"ollama_backends"`
+	ImageBackends  []ImageBackendConfig  `json:"image_backends"`
+	AudioBackends  []AudioBackendConfig  `json:"audio_backends"`
+	OllamaDefaults OllamaDefaultsConfig  `json:"ollama_defaults"`
+	Models         ModelsConfig          `json:"models"`
+	Policy         PolicyConfig          `json:"policy"`
+	Documents      DocumentsConfig       `json:"documents"`
+	Scheduler      SchedulerConfig       `json:"scheduler"`
 }
 
 // ServerConfig controls HTTP server behaviour.
@@ -43,25 +43,25 @@ type OllamaBackendConfig struct {
 // ImageBackendConfig describes a single image-generation backend.
 // APIKey, when set, is sent as "Authorization: Bearer <key>" on backend requests.
 type ImageBackendConfig struct {
-	ID                   string `json:"id"`
-	Type                 string `json:"type"`
-	URL                  string `json:"url"`
-	Host                 string `json:"host"`
+	ID                    string `json:"id"`
+	Type                  string `json:"type"`
+	URL                   string `json:"url"`
+	Host                  string `json:"host"`
 	MaxConcurrentRequests int    `json:"max_concurrent_requests"`
-	APIKey               string `json:"api_key,omitempty"`
-	Enabled              bool   `json:"enabled"`
+	APIKey                string `json:"api_key,omitempty"`
+	Enabled               bool   `json:"enabled"`
 }
 
 // AudioBackendConfig describes a single audio backend.
 // APIKey, when set, is sent as "Authorization: Bearer <key>" on backend requests.
 type AudioBackendConfig struct {
-	ID                   string `json:"id"`
-	Type                 string `json:"type"`
-	URL                  string `json:"url"`
-	Host                 string `json:"host"`
+	ID                    string `json:"id"`
+	Type                  string `json:"type"`
+	URL                   string `json:"url"`
+	Host                  string `json:"host"`
 	MaxConcurrentRequests int    `json:"max_concurrent_requests"`
-	APIKey               string `json:"api_key,omitempty"`
-	Enabled              bool   `json:"enabled"`
+	APIKey                string `json:"api_key,omitempty"`
+	Enabled               bool   `json:"enabled"`
 }
 
 // OllamaDefaultsConfig holds default parameters applied to every Ollama request.
@@ -73,14 +73,14 @@ type OllamaDefaultsConfig struct {
 
 // OllamaOptions maps to the "options" object in the Ollama /api/chat request.
 type OllamaOptions struct {
-	NumThread      int     `json:"num_thread"`
-	NumCtx         int     `json:"num_ctx"`
-	Temperature    float64 `json:"temperature"`
-	TopP           float64 `json:"top_p"`
-	TopK           int     `json:"top_k"`
-	RepeatPenalty  float64 `json:"repeat_penalty"`
-	NumPredict     int  `json:"num_predict"`
-	UseMmap        *bool `json:"use_mmap,omitempty"`
+	NumThread     int     `json:"num_thread"`
+	NumCtx        int     `json:"num_ctx"`
+	Temperature   float64 `json:"temperature"`
+	TopP          float64 `json:"top_p"`
+	TopK          int     `json:"top_k"`
+	RepeatPenalty float64 `json:"repeat_penalty"`
+	NumPredict    int     `json:"num_predict"`
+	UseMmap       *bool   `json:"use_mmap,omitempty"`
 }
 
 // ModelsConfig controls model exposure and aliases.

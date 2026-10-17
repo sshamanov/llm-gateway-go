@@ -25,7 +25,7 @@ const maxRequestBodySize = 10 * 1024 * 1024
 // chatCompletionRequest is the incoming OpenAI-compatible chat completions request body.
 type chatCompletionRequest struct {
 	Model       string               `json:"model"`
-	Messages    []chatRequestMessage  `json:"messages"`
+	Messages    []chatRequestMessage `json:"messages"`
 	Stream      *bool                `json:"stream,omitempty"`
 	MaxTokens   int                  `json:"max_tokens,omitempty"`
 	Temperature *float64             `json:"temperature,omitempty"`
@@ -260,14 +260,14 @@ func mapChatResponse(ollamaResp *ollama.ChatResponse, requestedModel string) cha
 	}
 
 	return chatCompletionResponse{
-		ID:     generateChatID(),
-		Object: "chat.completion",
+		ID:      generateChatID(),
+		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:  requestedModel,
+		Model:   requestedModel,
 		Choices: []chatChoice{
 			{
-				Index:       0,
-				Message:     message,
+				Index:        0,
+				Message:      message,
 				FinishReason: finishReason,
 			},
 		},

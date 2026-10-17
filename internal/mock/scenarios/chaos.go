@@ -24,30 +24,30 @@ func MultiBackendChaos(h *mock.Harness) error {
 
 	err = rh.StartFakeBackends([]mock.FakeOllamaConfig{
 		{
-			ID:           "b1",
-			Models:       []string{"llama3"},
-			LoadedModels: []string{"llama3"},
-			FailureRate:  0.3,            // 30% random failures.
-			ChatLatency:  50 * time.Millisecond,
+			ID:            "b1",
+			Models:        []string{"llama3"},
+			LoadedModels:  []string{"llama3"},
+			FailureRate:   0.3, // 30% random failures.
+			ChatLatency:   50 * time.Millisecond,
 			TotalDuration: int64(50 * time.Millisecond),
-			EvalCount:    50,
+			EvalCount:     50,
 		},
 		{
-			ID:           "b2",
-			Models:       []string{"llama3"},
-			LoadedModels: []string{"llama3"},
-			FailCount:    2,               // First 2 requests fail deterministically.
-			ChatLatency:  10 * time.Millisecond,
+			ID:            "b2",
+			Models:        []string{"llama3"},
+			LoadedModels:  []string{"llama3"},
+			FailCount:     2, // First 2 requests fail deterministically.
+			ChatLatency:   10 * time.Millisecond,
 			TotalDuration: int64(20 * time.Millisecond),
-			EvalCount:    60,
+			EvalCount:     60,
 		},
 		{
-			ID:           "b3",
-			Models:       []string{"llama3"},
-			LoadedModels: []string{"llama3"},
-			ChatLatency:  5 * time.Millisecond,
+			ID:            "b3",
+			Models:        []string{"llama3"},
+			LoadedModels:  []string{"llama3"},
+			ChatLatency:   5 * time.Millisecond,
 			TotalDuration: int64(10 * time.Millisecond),
-			EvalCount:    40,
+			EvalCount:     40,
 		},
 	}, 0)
 	if err != nil {
