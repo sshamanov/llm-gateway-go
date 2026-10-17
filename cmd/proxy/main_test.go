@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"llm-go-proxy/internal/backend"
 	"llm-go-proxy/internal/config"
 	"llm-go-proxy/internal/httpapi"
 	"llm-go-proxy/internal/logging"
+	"llm-go-proxy/internal/scheduler"
 	"llm-go-proxy/internal/storage"
 )
 
@@ -131,5 +133,32 @@ func TestServerHealthAndReadinessEndpoints(t *testing.T) {
 			t.Fatal(err)
 		}
 	default:
+	}
+}
+
+func TestPruneModelStats_KeepsStatsDuringOutage(t *testing.T) {
+	stats := scheduler.NewStatsTracker()
+	up := scheduler.BackendModelKey{BackendID: "up", ModelName: "kept"}
+	removed := scheduler.BackendModelKey{BackendID: "up", ModelName: "removed"}
+	down := scheduler.BackendModelKey{BackendID: "down", ModelName: "m"}
+	expired := scheduler.BackendModelKey{BackendID: "expired", ModelName: "m"}
+	for _, k := range []scheduler.BackendModelKey{up, removed, down, expired} {
+		stats.RecordSuccess(k, 10, 0)
+	}
+
+	pruneModelStats(stats, []backend.BackendSnapshot{
+		{ID: "up", Healthy: true, AvailableModels: []string{"kept"}},
+		{ID: "down", Healthy: false, AvailableModels: []string{"m"}},
+		{ID: "expired", Healthy: true},
+	})
+
+	all := stats.SnapshotAll()
+	for _, k := range []scheduler.BackendModelKey{up, down, expired} {
+		if _, ok := all[k]; !ok {
+			t.Errorf("stats for %v pruned, want kept", k)
+		}
+	}
+	if _, ok := all[removed]; ok {
+		t.Errorf("stats for %v kept, want pruned", removed)
 	}
 }

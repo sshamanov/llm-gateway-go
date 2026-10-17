@@ -173,16 +173,28 @@ func run() error {
 }
 
 // pruneModelStats drops learned per-model stats rows for models that no longer
-// appear in any backend's advertised model list. This keeps the /debug UI free
+// appear in a backend's advertised model list. This keeps the /debug UI free
 // of stale performance rows after a model is removed from Ollama.
+//
+// A backend whose model list is currently unknown (unhealthy, or its list
+// expired during an outage) keeps all its rows, so a temporary outage does
+// not wipe learned performance.
 func pruneModelStats(stats *scheduler.StatsTracker, snapshots []backend.BackendSnapshot) {
 	valid := make(map[scheduler.BackendModelKey]struct{})
+	unknown := make(map[string]bool)
 	for _, snap := range snapshots {
+		if !snap.Healthy || len(snap.AvailableModels) == 0 {
+			unknown[snap.ID] = true
+			continue
+		}
 		for _, model := range snap.AvailableModels {
 			valid[scheduler.BackendModelKey{BackendID: snap.ID, ModelName: model}] = struct{}{}
 		}
 	}
 	stats.Prune(func(key scheduler.BackendModelKey) bool {
+		if unknown[key.BackendID] {
+			return true
+		}
 		_, ok := valid[key]
 		return ok
 	})

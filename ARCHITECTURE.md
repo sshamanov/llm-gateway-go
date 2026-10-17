@@ -428,7 +428,9 @@ unreachable, its models persist until `modelStaleness` (5 minutes) elapses since
 the last successful tags poll; `pollTags` then clears `AvailableModels` on
 failure. Learned per-model scheduler stats (`StatsTracker`) are pruned on a
 1-minute ticker in `cmd/proxy/main.go` (`pruneModelStats`), keeping only rows
-whose `BackendModelKey` matches a backend's current `AvailableModels`. No extra
+whose `BackendModelKey` matches a backend's current `AvailableModels`. A
+backend that is unhealthy or has an empty (expired) model list keeps all its
+rows, so an outage does not discard learned performance. No extra
 polling is performed — both mechanisms ride existing tickers.
 
 ## 7.2 Exposed models
