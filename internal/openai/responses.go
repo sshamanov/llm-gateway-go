@@ -41,13 +41,34 @@ type responsesRequest struct {
 
 // responseInputItem is a single item in the Responses API input array.
 type responseInputItem struct {
-	Role      string                 `json:"role"`
-	Content   []responseContentBlock `json:"content,omitempty"`
-	Type      string                 `json:"type,omitempty"`
-	CallID    string                 `json:"call_id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Arguments string                 `json:"arguments,omitempty"`
-	Output    string                 `json:"output,omitempty"`
+	Role string `json:"role"`
+	// Content is either a plain string or an array of content blocks.
+	Content   json.RawMessage `json:"content,omitempty"`
+	Type      string          `json:"type,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Output    string          `json:"output,omitempty"`
+}
+
+// contentBlocks decodes Content as a string (one text block) or a block array.
+func (it responseInputItem) contentBlocks() ([]responseContentBlock, error) {
+	raw := bytes.TrimSpace(it.Content)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	if raw[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, err
+		}
+		return []responseContentBlock{{Type: "input_text", Text: text}}, nil
+	}
+	var blocks []responseContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, err
+	}
+	return blocks, nil
 }
 
 // responseContentBlock is a content block within a responseInputItem.
@@ -55,6 +76,7 @@ type responseContentBlock struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	FileData string `json:"file_data,omitempty"` // data URL: data:{mime};base64,{data}
+	ImageURL string `json:"image_url,omitempty"` // input_image: data URL
 	Filename string `json:"filename,omitempty"`
 }
 
@@ -175,20 +197,39 @@ func convertInput(input json.RawMessage, uploadDir string) ([]ollama.ChatMessage
 				Content: item.Output,
 			})
 			continue
+		case "", "message":
+			// A role/content message, handled below.
+		default:
+			// Other item types (e.g. reasoning) carry nothing Ollama can use.
+			continue
+		}
+
+		blocks, err := item.contentBlocks()
+		if err != nil {
+			meta.cleanup()
+			return nil, nil, fmt.Errorf("invalid content for %s item: %w", item.Role, err)
 		}
 
 		var sb strings.Builder
 		var images []string
 
-		for _, block := range item.Content {
+		for _, block := range blocks {
 			switch block.Type {
-			case "input_text":
+			case "input_text", "output_text", "text":
 				if sb.Len() > 0 {
 					sb.WriteString("\n")
 				}
 				sb.WriteString(block.Text)
 			case "input_file", "input_image":
-				filePath, base64Data, err := spoolBase64File(block.FileData, block.Filename, uploadDir)
+				data := block.FileData
+				if data == "" {
+					data = block.ImageURL
+				}
+				if data != "" && !strings.HasPrefix(data, "data:") {
+					meta.cleanup()
+					return nil, nil, fmt.Errorf("only data: URLs are supported for %s", block.Type)
+				}
+				filePath, base64Data, err := spoolBase64File(data, block.Filename, uploadDir)
 				if err != nil {
 					meta.cleanup()
 					return nil, nil, err

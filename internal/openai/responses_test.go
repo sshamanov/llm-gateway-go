@@ -645,6 +645,44 @@ func TestConvertInput_Array(t *testing.T) {
 	}
 }
 
+// TestConvertInput_StringContentAndMultiTurn covers the common SDK shapes:
+// string content inside an array item, a prior assistant output_text turn,
+// and an input_image given as image_url.
+func TestConvertInput_StringContentAndMultiTurn(t *testing.T) {
+	png := "iVBORw0KGgo="
+	input := json.RawMessage(`[
+		{"role":"user","content":"Hi"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello!"}]},
+		{"type":"reasoning","summary":[]},
+		{"role":"user","content":[{"type":"input_text","text":"Look"},{"type":"input_image","image_url":"data:image/png;base64,` + png + `"}]}
+	]`)
+	messages, meta, err := convertInput(input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.cleanup()
+
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(messages), messages)
+	}
+	if messages[0].Role != "user" || messages[0].Content != "Hi" {
+		t.Errorf("messages[0] = %+v, want user/Hi", messages[0])
+	}
+	if messages[1].Role != "assistant" || messages[1].Content != "Hello!" {
+		t.Errorf("messages[1] = %+v, want assistant/Hello!", messages[1])
+	}
+	if messages[2].Content != "Look" || len(messages[2].Images) != 1 || messages[2].Images[0] != png {
+		t.Errorf("messages[2] = %+v, want text Look plus one image", messages[2])
+	}
+}
+
+func TestConvertInput_RemoteImageURLRejected(t *testing.T) {
+	input := json.RawMessage(`[{"role":"user","content":[{"type":"input_image","image_url":"https://example.com/a.png"}]}]`)
+	if _, _, err := convertInput(input, t.TempDir()); err == nil {
+		t.Fatal("expected error for remote image URL")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // convertInstructions unit tests
 // ---------------------------------------------------------------------------

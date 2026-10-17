@@ -52,3 +52,4 @@ Last updated: 2026-08-26
 - Resolved alias option mutation: child extends now copies parent options before overlay; test asserts parent temperature intact (fails on old code).
 - Resolved image gen hang: SendGeneration takes ctx; handler uses request ctx with 10-min ceiling; cancel test passes.
 - Resolved Anthropic stream protocol: message_start first, no [DONE], text block closed before tool_use, explicit empty text/input in block starts, error event on truncated stream; strict event-order test added.
+- Resolved Responses input parsing: string content in array items, output_text/text blocks, input_image image_url data URLs, non-message items skipped; tests added.
