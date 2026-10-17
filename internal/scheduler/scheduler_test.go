@@ -476,3 +476,64 @@ func TestScheduler_Dispatch_MultipleJobs(t *testing.T) {
 		}
 	}
 }
+
+// TestScheduler_Dispatch_EnforcesHostCapacity verifies that leases are
+// released exactly once per job, so in-flight backend requests never exceed
+// the host limit and the active count returns to zero.
+func TestScheduler_Dispatch_EnforcesHostCapacity(t *testing.T) {
+	var inFlight, peak int32
+	body := validChatResponse("llama3", "Hello")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&inFlight, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		atomic.AddInt32(&inFlight, -1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	s := newTestScheduler(t, server.URL, 2, defaultConfig())
+	defer s.Stop()
+	s.Start()
+
+	const numJobs = 8
+	jobs := make([]*Job, numJobs)
+	for i := range jobs {
+		jobs[i] = &Job{
+			ID:         fmt.Sprintf("cap%d", i),
+			Candidates: []string{"llama3"},
+			Messages:   []ollama.ChatMessage{{Role: "user", Content: "Hi"}},
+			ResultChan: make(chan JobResult, 1),
+		}
+		if err := s.Submit(jobs[i]); err != nil {
+			t.Fatalf("Submit failed: %v", err)
+		}
+	}
+	for _, j := range jobs {
+		select {
+		case r := <-j.ResultChan:
+			if r.Err != nil {
+				t.Fatalf("%s failed: %v", j.ID, r.Err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for %s", j.ID)
+		}
+	}
+
+	if p := atomic.LoadInt32(&peak); p > 2 {
+		t.Errorf("peak concurrent backend requests = %d, want <= 2", p)
+	}
+	deadline := time.Now().Add(time.Second)
+	for s.Scorer.Hosts.HostActiveJobs("default") != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := s.Scorer.Hosts.HostActiveJobs("default"); n != 0 {
+		t.Errorf("host active jobs after completion = %d, want 0", n)
+	}
+}

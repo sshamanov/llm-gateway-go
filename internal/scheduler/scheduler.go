@@ -178,10 +178,9 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 	assignment := *a
 	job := assignment.Job
 
-	// Ensure leases are always released and the job is marked appropriately.
+	// Leases are released by the run function that owns them; this defer only
+	// marks the job and wakes dispatch to re-evaluate capacity.
 	defer func() {
-		s.Scorer.Hosts.ReleaseHost(assignment.Host)
-		s.Scorer.Backends.ReleaseBackend(assignment.BackendID)
 		if job.State == StateRunning {
 			job.State = StateAborted
 		}
@@ -194,6 +193,11 @@ func (s *Scheduler) runAssignment(a *Assignment) {
 
 	baseURL, ok := s.BackendURLs[assignment.BackendID]
 	if !ok {
+		s.Scorer.Hosts.ReleaseHost(assignment.Host)
+		s.Scorer.Backends.ReleaseBackend(assignment.BackendID)
+		if job.Streaming {
+			close(job.StreamCh)
+		}
 		err := fmt.Errorf("scheduler: unknown backend %q", assignment.BackendID)
 		if s.Logger != nil {
 			s.Logger.Error("assignment failed",
@@ -226,11 +230,14 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 
 	failedBackends := make(map[string]bool)
 
-	// Ensure the outer defer in runAssignment releases the correct (last-used)
-	// leases on return.
+	// held tracks whether currentHost/currentBackendID leases are owned, so
+	// each lease is released exactly once even on failed retries.
+	held := true
 	defer func() {
-		s.Scorer.Hosts.ReleaseHost(currentHost)
-		s.Scorer.Backends.ReleaseBackend(currentBackendID)
+		if held {
+			s.Scorer.Hosts.ReleaseHost(currentHost)
+			s.Scorer.Backends.ReleaseBackend(currentBackendID)
+		}
 	}()
 
 	maxAttempts := s.Scorer.Config.Retry.MaxAttempts
@@ -243,6 +250,7 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 			// Release current (failed) leases.
 			s.Scorer.Hosts.ReleaseHost(currentHost)
 			s.Scorer.Backends.ReleaseBackend(currentBackendID)
+			held = false
 
 			alt := s.findAlternativeBackend(job, failedBackends)
 			if alt == nil {
@@ -271,13 +279,13 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 				job.ResultChan <- JobResult{Err: err}
 				return
 			}
+			held = true
 
 			currentBackendID = alt.BackendID
 			currentHost = alt.Host
 			currentModel = alt.ModelName
 			currentBaseURL = s.BackendURLs[alt.BackendID]
 
-			// Update outer assignment so the defer in runAssignment uses correct leases.
 			a.Host = alt.Host
 			a.BackendID = alt.BackendID
 			job.BackendID = alt.BackendID
@@ -354,8 +362,7 @@ func (s *Scheduler) runNonStreamingAssignment(a *Assignment, baseURL string) {
 
 // runStreamingAssignment executes a streaming job assignment against an Ollama
 // backend. It manages its own retry loop (with context-aware chunk forwarding)
-// and releases/captures leases so the outer defer in runAssignment correctly
-// releases the final set of leases on return.
+// and owns its leases, releasing the final set exactly once on return.
 func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 	job := a.Job
 	currentBackendID := a.BackendID
@@ -366,10 +373,14 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 	// Track failed backend IDs so we don't retry the same one.
 	failedBackends := make(map[string]bool)
 
-	// Ensure cleanup on exit.
+	// Ensure cleanup on exit. held tracks lease ownership so each lease is
+	// released exactly once even on failed retries.
+	held := true
 	defer func() {
-		s.Scorer.Hosts.ReleaseHost(currentHost)
-		s.Scorer.Backends.ReleaseBackend(currentBackendID)
+		if held {
+			s.Scorer.Hosts.ReleaseHost(currentHost)
+			s.Scorer.Backends.ReleaseBackend(currentBackendID)
+		}
 		if job.State == StateRunning {
 			job.State = StateAborted
 		}
@@ -391,6 +402,7 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 			// Release current (failed) leases.
 			s.Scorer.Hosts.ReleaseHost(currentHost)
 			s.Scorer.Backends.ReleaseBackend(currentBackendID)
+			held = false
 
 			// Find an alternative backend, excluding previously-failed ones.
 			alt := s.findAlternativeBackend(job, failedBackends)
@@ -421,9 +433,9 @@ func (s *Scheduler) runStreamingAssignment(a *Assignment, baseURL string) {
 				job.ResultChan <- JobResult{Err: err}
 				return
 			}
+			held = true
 
-			// Update tracking variables and the outer assignment so the defer
-			// in runAssignment releases the correct (new) leases.
+			// Update tracking variables and the outer assignment.
 			currentBackendID = alt.BackendID
 			currentHost = alt.Host
 			currentModel = alt.ModelName
